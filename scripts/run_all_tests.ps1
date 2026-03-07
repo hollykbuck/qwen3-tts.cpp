@@ -510,15 +510,10 @@ if (-not $cliExe) {
     $basicRes = Invoke-CommandCapture -exe $cliExe -commandArgs @(
         "-m", $resolvedModelDir,
         "-t", "Hello world from qwen3 tts.",
-        "-o", $basicOut,
-        "--temperature", "0",
-        "--top-k", "0",
-        "--top-p", "1.0",
-        "--repetition-penalty", "1.0",
-        "--max-tokens", "96"
+        "-o", $basicOut
     )
     if ($basicRes.ExitCode -eq 0) {
-        Validate-WavOutput -testName "CLI basic synthesis" -wavPath $basicOut -minRms 0.000001 | Out-Null
+        Validate-WavOutput -testName "CLI basic synthesis" -wavPath $basicOut | Out-Null
     } else {
         Add-Fail "CLI basic synthesis (exit code: $($basicRes.ExitCode))"
         Write-OutputTail -output $basicRes.Output
@@ -531,12 +526,7 @@ if (-not $cliExe) {
             "-m", $resolvedModelDir,
             "-t", "Hello world from cloned voice.",
             "-r", $refAudio,
-            "-o", $cloneOut,
-            "--temperature", "0",
-            "--top-k", "0",
-            "--top-p", "1.0",
-            "--repetition-penalty", "1.0",
-            "--max-tokens", "96"
+            "-o", $cloneOut
         )
         if ($cloneRes.ExitCode -eq 0) {
             Validate-WavOutput -testName "CLI voice cloning" -wavPath $cloneOut | Out-Null
