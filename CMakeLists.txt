@@ -207,6 +207,15 @@ target_link_libraries(test_transformer PRIVATE
 add_executable(test_decoder
     tests/test_decoder.cpp
 )
+
+# Quantization tool
+add_executable(qwen3-tts-quantize
+    src/qwen3_tts_quantize.cpp
+)
+target_include_directories(qwen3-tts-quantize PRIVATE
+    ${GGML_DIR}/include
+)
+qwen3_link_ggml(qwen3-tts-quantize)
 target_link_libraries(test_decoder PRIVATE
     audio_tokenizer_decoder
     Threads::Threads
