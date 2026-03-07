@@ -6,6 +6,7 @@ build*/
 *.dylib
 
 # Models (too large for git)
+models/
 models/*.gguf
 models/Qwen3-TTS-*/
 models/coreml/
