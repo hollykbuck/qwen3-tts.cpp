@@ -134,6 +134,10 @@ public:
     
     // Check if models are loaded
     bool is_loaded() const { return models_loaded_; }
+
+    // List named speakers exposed by the currently loaded model metadata.
+    // Returns normalized (lowercase) speaker keys; empty for non-CustomVoice models.
+    std::vector<std::string> get_available_speakers() const;
     
 private:
     tts_result synthesize_internal(const std::string & text,

@@ -11,10 +11,29 @@ actual class QwenEngine actual constructor() {
         nativePtr = nativeInit()
     }
 
-    actual fun loadModels(modelDir: String): Boolean = nativeLoadModels(nativePtr, modelDir)
+    actual fun loadModels(modelDir: String, modelName: String?): Boolean =
+        nativeLoadModels(nativePtr, modelDir, modelName)
 
-    actual fun synthesize(text: String, referenceWav: String?): NativeResult = 
-        nativeSynthesize(nativePtr, text, referenceWav, null)
+    actual fun synthesize(
+        text: String,
+        referenceWav: String?,
+        speakerEmbeddingPath: String?,
+        params: NativeParams
+    ): NativeResult =
+        nativeSynthesize(nativePtr, text, referenceWav, speakerEmbeddingPath, params)
+
+    actual fun extractSpeakerEmbedding(referenceWav: String, outputPath: String): Boolean =
+        nativeExtractSpeakerEmbedding(nativePtr, referenceWav, outputPath)
+
+    actual fun getAvailableSpeakers(): List<String> {
+        val raw = nativeGetAvailableSpeakers(nativePtr).orEmpty()
+        if (raw.isBlank()) return emptyList()
+        return raw
+            .lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .toList()
+    }
 
     actual fun close() {
         if (nativePtr != 0L) {
@@ -25,8 +44,26 @@ actual class QwenEngine actual constructor() {
 
     private external fun nativeInit(): Long
     private external fun nativeFree(ptr: Long)
-    private external fun nativeLoadModels(ptr: Long, modelDir: String): Boolean
-    private external fun nativeSynthesize(ptr: Long, text: String, referenceWav: String?, params: Any?): NativeResult
+    private external fun nativeLoadModels(ptr: Long, modelDir: String, modelName: String?): Boolean
+    private external fun nativeSynthesize(
+        ptr: Long,
+        text: String,
+        referenceWav: String?,
+        speakerEmbeddingPath: String?,
+        params: NativeParams?
+    ): NativeResult
+    private external fun nativeExtractSpeakerEmbedding(
+        ptr: Long,
+        referenceWav: String,
+        outputPath: String
+    ): Boolean
+    private external fun nativeGetAvailableSpeakers(ptr: Long): String?
+
+    actual class NativeParams actual constructor(
+        actual val languageId: Int = 2050,
+        actual val instruction: String? = null,
+        actual val speaker: String? = null
+    )
 
     actual class NativeResult actual constructor(
         actual val audio: FloatArray?,

@@ -251,6 +251,16 @@ bool Qwen3TTS::load_models(const std::string & model_dir, const std::string & mo
     return true;
 }
 
+std::vector<std::string> Qwen3TTS::get_available_speakers() const {
+    std::vector<std::string> speakers;
+    const auto & speaker_map = transformer_.get_config().speaker_id_map;
+    speakers.reserve(speaker_map.size());
+    for (const auto & it : speaker_map) {
+        speakers.push_back(it.first);
+    }
+    return speakers;
+}
+
 tts_result Qwen3TTS::synthesize(const std::string & text,
                                  const tts_params & params) {
     tts_result result;

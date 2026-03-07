@@ -30,6 +30,7 @@ typedef struct {
     float repetition_penalty;
     int32_t language_id;
     const char* instruction;
+    const char* speaker;
 } qwen3_tts_params_t;
 
 typedef struct {
@@ -47,6 +48,11 @@ QWEN3_TTS_API qwen3_tts_context_t* qwen3_tts_init();
 QWEN3_TTS_API void qwen3_tts_free(qwen3_tts_context_t* ctx);
 
 QWEN3_TTS_API int32_t qwen3_tts_load_models(qwen3_tts_context_t* ctx, const char* model_dir);
+QWEN3_TTS_API int32_t qwen3_tts_load_models_with_name(
+    qwen3_tts_context_t* ctx,
+    const char* model_dir,
+    const char* model_name
+);
 
 QWEN3_TTS_API qwen3_tts_result_t qwen3_tts_synthesize(
     qwen3_tts_context_t* ctx, 
@@ -73,6 +79,11 @@ QWEN3_TTS_API int32_t qwen3_tts_extract_speaker_embedding(
     const char* reference_audio,
     const char* output_path
 );
+
+// Newline-separated speaker names (lowercase), or empty string if unavailable.
+// Returned string is heap-allocated and must be released with qwen3_tts_free_string().
+QWEN3_TTS_API char* qwen3_tts_get_available_speakers(qwen3_tts_context_t* ctx);
+QWEN3_TTS_API void qwen3_tts_free_string(char* value);
 
 QWEN3_TTS_API void qwen3_tts_free_result(qwen3_tts_result_t result);
 

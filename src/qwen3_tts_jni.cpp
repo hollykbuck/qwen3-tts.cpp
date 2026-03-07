@@ -13,6 +13,7 @@ static jmethodID g_result_constructor = nullptr;
 static jclass g_params_class = nullptr;
 static jfieldID g_lang_id_field = nullptr;
 static jfieldID g_instruction_field = nullptr;
+static jfieldID g_speaker_field = nullptr;
 
 extern "C" {
 
@@ -56,6 +57,12 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
         return JNI_ERR;
     }
 
+    g_speaker_field = env->GetFieldID(g_params_class, "speaker", "Ljava/lang/String;");
+    if (g_speaker_field == nullptr) {
+        LOGE("Could not find speaker field in NativeParams");
+        return JNI_ERR;
+    }
+
     return JNI_VERSION_1_6;
 }
 
@@ -76,12 +83,26 @@ JNIEXPORT void JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeFree(JNI
     qwen3_tts_free(reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr));
 }
 
-JNIEXPORT jboolean JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeLoadModels(JNIEnv* env, jobject thiz, jlong ctx_ptr, jstring model_dir) {
+JNIEXPORT jboolean JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeLoadModels(
+    JNIEnv* env, jobject thiz, jlong ctx_ptr, jstring model_dir, jstring model_name
+) {
     if (ctx_ptr == 0 || model_dir == nullptr) return JNI_FALSE;
     const char* c_model_dir = env->GetStringUTFChars(model_dir, nullptr);
     if (c_model_dir == nullptr) return JNI_FALSE; // Check for OOM
 
-    int32_t result = qwen3_tts_load_models(reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr), c_model_dir);
+    const char* c_model_name = nullptr;
+    if (model_name != nullptr) {
+        c_model_name = env->GetStringUTFChars(model_name, nullptr);
+        if (c_model_name == nullptr) {
+            env->ReleaseStringUTFChars(model_dir, c_model_dir);
+            return JNI_FALSE;
+        }
+    }
+
+    int32_t result = qwen3_tts_load_models_with_name(
+        reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr), c_model_dir, c_model_name);
+
+    if (c_model_name) env->ReleaseStringUTFChars(model_name, c_model_name);
     env->ReleaseStringUTFChars(model_dir, c_model_dir);
     return result != 0 ? JNI_TRUE : JNI_FALSE;
 }
@@ -112,10 +133,12 @@ JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynth
         }
     }
 
-    qwen3_tts_params_t c_params = {4096, 0.9f, 1.0f, 50, 4, 0, 1, 1.05f, 2050, nullptr};
+    qwen3_tts_params_t c_params = {4096, 0.9f, 1.0f, 50, 4, 0, 1, 1.05f, 2050, nullptr, nullptr};
     
     jstring j_instruction = nullptr;
     const char* c_instruction = nullptr;
+    jstring j_speaker = nullptr;
+    const char* c_speaker = nullptr;
 
     if (params != nullptr && g_lang_id_field != nullptr) {
         c_params.language_id = env->GetIntField(params, g_lang_id_field);
@@ -125,6 +148,13 @@ JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynth
         if (j_instruction != nullptr) {
             c_instruction = env->GetStringUTFChars(j_instruction, nullptr);
             c_params.instruction = c_instruction;
+        }
+    }
+    if (params != nullptr && g_speaker_field != nullptr) {
+        j_speaker = (jstring)env->GetObjectField(params, g_speaker_field);
+        if (j_speaker != nullptr) {
+            c_speaker = env->GetStringUTFChars(j_speaker, nullptr);
+            c_params.speaker = c_speaker;
         }
     }
 
@@ -142,6 +172,7 @@ JNIEXPORT jobject JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeSynth
     if (c_ref_wav) env->ReleaseStringUTFChars(reference_wav, c_ref_wav);
     if (c_speaker_embedding) env->ReleaseStringUTFChars(speaker_embedding_path, c_speaker_embedding);
     if (c_instruction) env->ReleaseStringUTFChars(j_instruction, c_instruction);
+    if (c_speaker) env->ReleaseStringUTFChars(j_speaker, c_speaker);
 
     if (g_result_class == nullptr || g_result_constructor == nullptr) {
         qwen3_tts_free_result(c_result);
@@ -197,6 +228,19 @@ JNIEXPORT jboolean JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeExtr
     env->ReleaseStringUTFChars(reference_wav, c_ref_wav);
     env->ReleaseStringUTFChars(output_path, c_output_path);
     return ok != 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jstring JNICALL Java_com_qwen_tts_studio_engine_QwenEngine_nativeGetAvailableSpeakers(
+    JNIEnv* env, jobject thiz, jlong ctx_ptr
+) {
+    if (ctx_ptr == 0) return nullptr;
+
+    char* speakers = qwen3_tts_get_available_speakers(reinterpret_cast<qwen3_tts_context_t*>(ctx_ptr));
+    if (!speakers) return nullptr;
+
+    jstring result = env->NewStringUTF(speakers);
+    qwen3_tts_free_string(speakers);
+    return result;
 }
 
 }

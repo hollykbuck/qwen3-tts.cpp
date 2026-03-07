@@ -9,28 +9,42 @@ import com.example.qwen3tts.cinterop.*
 actual class QwenEngine actual constructor() {
     private var nativePtr: CPointer<qwen3_tts_context>? = qwen3_tts_init()
 
-    actual fun loadModels(modelDir: String): Boolean {
-        return qwen3_tts_load_models(nativePtr, modelDir) != 0
+    actual fun loadModels(modelDir: String, modelName: String?): Boolean {
+        return qwen3_tts_load_models_with_name(nativePtr, modelDir, modelName) != 0
     }
 
-    actual fun synthesize(text: String, referenceWav: String?): NativeResult {
+    actual fun synthesize(
+        text: String,
+        referenceWav: String?,
+        speakerEmbeddingPath: String?,
+        params: NativeParams
+    ): NativeResult {
         memScoped {
-            val params = alloc<qwen3_tts_params_t>()
+            val cParams = alloc<qwen3_tts_params_t>()
             // Set defaults (must match C implementation)
-            params.max_audio_tokens = 4096
-            params.temperature = 0.9f
-            params.top_p = 1.0f
-            params.top_k = 50
-            params.n_threads = 4
-            params.print_progress = 0
-            params.print_timing = 1
-            params.repetition_penalty = 1.05f
-            params.language_id = 2050
+            cParams.max_audio_tokens = 4096
+            cParams.temperature = 0.9f
+            cParams.top_p = 1.0f
+            cParams.top_k = 50
+            cParams.n_threads = 4
+            cParams.print_progress = 0
+            cParams.print_timing = 1
+            cParams.repetition_penalty = 1.05f
+            cParams.language_id = params.languageId
+            cParams.instruction = params.instruction?.cstr?.getPointer(this)
+            cParams.speaker = params.speaker?.cstr?.getPointer(this)
 
-            val cResult = if (referenceWav != null && referenceWav.isNotEmpty()) {
-                qwen3_tts_synthesize_with_voice(nativePtr, text, referenceWav, params.readValue())
+            val cResult = if (speakerEmbeddingPath != null && speakerEmbeddingPath.isNotEmpty()) {
+                qwen3_tts_synthesize_with_speaker_embedding(
+                    nativePtr,
+                    text,
+                    speakerEmbeddingPath,
+                    cParams.readValue()
+                )
+            } else if (referenceWav != null && referenceWav.isNotEmpty()) {
+                qwen3_tts_synthesize_with_voice(nativePtr, text, referenceWav, cParams.readValue())
             } else {
-                qwen3_tts_synthesize(nativePtr, text, params.readValue())
+                qwen3_tts_synthesize(nativePtr, text, cParams.readValue())
             }
             
             val audio = if (cResult.audio_len > 0) {
@@ -50,12 +64,34 @@ actual class QwenEngine actual constructor() {
         }
     }
 
+    actual fun extractSpeakerEmbedding(referenceWav: String, outputPath: String): Boolean {
+        return qwen3_tts_extract_speaker_embedding(nativePtr, referenceWav, outputPath) != 0
+    }
+
+    actual fun getAvailableSpeakers(): List<String> {
+        val speakersRawPtr = qwen3_tts_get_available_speakers(nativePtr) ?: return emptyList()
+        val speakersRaw = speakersRawPtr.toKString()
+        qwen3_tts_free_string(speakersRawPtr)
+        if (speakersRaw.isBlank()) return emptyList()
+        return speakersRaw
+            .lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .toList()
+    }
+
     actual fun close() {
         if (nativePtr != null) {
             qwen3_tts_free(nativePtr)
             nativePtr = null
         }
     }
+
+    actual class NativeParams actual constructor(
+        actual val languageId: Int = 2050,
+        actual val instruction: String? = null,
+        actual val speaker: String? = null
+    )
 
     actual class NativeResult actual constructor(
         actual val audio: FloatArray?,

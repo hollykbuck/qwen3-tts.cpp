@@ -3,6 +3,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <vector>
+#include <string>
 
 #ifdef _WIN32
 #define strdup _strdup
@@ -27,6 +28,9 @@ static qwen3_tts::tts_params convert_params(qwen3_tts_params_t params) {
     p.language_id = params.language_id;
     if (params.instruction) {
         p.instruction = params.instruction;
+    }
+    if (params.speaker) {
+        p.speaker = params.speaker;
     }
     return p;
 }
@@ -60,8 +64,16 @@ void qwen3_tts_free(qwen3_tts_context_t* ctx) {
 }
 
 int32_t qwen3_tts_load_models(qwen3_tts_context_t* ctx, const char* model_dir) {
+    return qwen3_tts_load_models_with_name(ctx, model_dir, nullptr);
+}
+
+int32_t qwen3_tts_load_models_with_name(
+    qwen3_tts_context_t* ctx,
+    const char* model_dir,
+    const char* model_name
+) {
     if (!ctx || !model_dir) return 0;
-    return ctx->tts.load_models(model_dir) ? 1 : 0;
+    return ctx->tts.load_models(model_dir, model_name ? model_name : "") ? 1 : 0;
 }
 
 qwen3_tts_result_t qwen3_tts_synthesize(
@@ -133,6 +145,29 @@ int32_t qwen3_tts_extract_speaker_embedding(
     }
 
     return qwen3_tts::save_speaker_embedding_file(output_path, speaker_embedding) ? 1 : 0;
+}
+
+char* qwen3_tts_get_available_speakers(qwen3_tts_context_t* ctx) {
+    if (!ctx) {
+        return strdup("");
+    }
+
+    const std::vector<std::string> speakers = ctx->tts.get_available_speakers();
+    std::string joined;
+    for (size_t i = 0; i < speakers.size(); ++i) {
+        if (i != 0) {
+            joined.push_back('\n');
+        }
+        joined += speakers[i];
+    }
+
+    return strdup(joined.c_str());
+}
+
+void qwen3_tts_free_string(char* value) {
+    if (value) {
+        free(value);
+    }
 }
 
 void qwen3_tts_free_result(qwen3_tts_result_t result) {
