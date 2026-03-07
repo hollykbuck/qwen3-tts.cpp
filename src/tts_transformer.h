@@ -199,7 +199,8 @@ struct tts_transformer_state {
     int32_t sched_reserved_ctx = 0;
     int32_t sched_reserved_prefill_len = 0;
     
-    std::vector<uint8_t> compute_meta;
+    std::vector<uint8_t> compute_meta; // Talker compute meta
+    std::vector<std::vector<uint8_t>> code_pred_compute_meta; // Code predictor compute meta per step [0..14]
     std::vector<ggml_fp16_t> code_pred_mask;
     
     tts_kv_cache cache;           // Talker KV cache (28 layers)

@@ -4,7 +4,8 @@ param(
     [string]$Configuration = "Release",
     [string]$ModelDir = "models",
     [string]$ModelName06 = "qwen3-tts-0.6b-f16.gguf",
-    [string]$ModelName17 = "qwen3-tts-1.7b-f16.gguf",
+    [string]$ModelName17Base = "qwen3-tts-1.7b-base-f16.gguf",
+    [string]$ModelName17Custom = "qwen3-tts-1.7b-customvoice-f16.gguf",
     [string]$Model17Speaker = "vivian",
     [string]$ReferenceAudio = "examples/readme_clone_input.wav",
     [string]$OutputDir = "test_output",
@@ -420,7 +421,8 @@ if (-not $tokenizerExe -or -not $encoderExe -or -not $transformerExe -or -not $d
 }
 
 $ttsModel = Join-Path $resolvedModelDir $ModelName06
-$ttsModel17 = Join-Path $resolvedModelDir $ModelName17
+$ttsModel17Base = Join-Path $resolvedModelDir $ModelName17Base
+$ttsModel17Custom = Join-Path $resolvedModelDir $ModelName17Custom
 $tokModel = Join-Path $resolvedModelDir "qwen3-tts-tokenizer-f16.gguf"
 $resolvedRefAudioArg = if ([System.IO.Path]::IsPathRooted($ReferenceAudio)) {
     $ReferenceAudio
@@ -471,7 +473,8 @@ $preflightChecks = @(
     @{ Label = "Transformer test binary";    Path = $transformerExe; Required = $RequireComponentTests; Hint = "Run: pwsh -File .\build.ps1 -BuildAll -Configuration $Configuration" },
     @{ Label = "Decoder test binary";        Path = $decoderExe;     Required = $RequireComponentTests; Hint = "Run: pwsh -File .\build.ps1 -BuildAll -Configuration $Configuration" },
     @{ Label = "TTS model (0.6B)";           Path = $ttsModel;       Required = $true;  Hint = "Place $ModelName06 under '$resolvedModelDir'." },
-    @{ Label = "TTS model (1.7B)";           Path = $ttsModel17;     Required = $run17B; Hint = "Place $ModelName17 under '$resolvedModelDir'." },
+    @{ Label = "TTS model (1.7B Base)";      Path = $ttsModel17Base; Required = $run17B; Hint = "Place $ModelName17Base under '$resolvedModelDir'." },
+    @{ Label = "TTS model (1.7B Custom)";    Path = $ttsModel17Custom; Required = $run17B; Hint = "Place $ModelName17Custom under '$resolvedModelDir'." },
     @{ Label = "Tokenizer model";            Path = $tokModel;       Required = $true;  Hint = "Place qwen3-tts-tokenizer-f16.gguf under '$resolvedModelDir'." },
     @{ Label = "Reference audio";            Path = $refAudio;       Required = $true; Hint = "Use -ReferenceAudio or place examples/readme_clone_input.wav." },
     @{ Label = "Encoder reference embedding";Path = $encoderRef;     Required = $RequireComponentTests; Hint = "Run: pwsh -File .\scripts\prepare_test_assets.ps1 -GenerateMissing" },
@@ -599,8 +602,8 @@ if (-not $run17B) {
     Add-Skip "1.7B CLI output tests disabled (-Skip17B)"
 } elseif (-not $cliExe) {
     Add-Skip "1.7B CLI output tests (qwen3-tts-cli binary missing)"
-} elseif (-not (Test-Path $ttsModel17)) {
-    Add-Fail "1.7B CLI output tests (required model missing: $ttsModel17)"
+} elseif (-not (Test-Path $ttsModel17Base) -or -not (Test-Path $ttsModel17Custom)) {
+    Add-Fail "1.7B CLI output tests (required models missing)"
 } else {
     $basic17Out = Join-Path $resolvedOutputDir "regression_1p7b_basic.wav"
     $clone17Out = Join-Path $resolvedOutputDir "regression_1p7b_clone.wav"
@@ -611,7 +614,7 @@ if (-not $run17B) {
     Write-Host "--- CLI 1.7B basic synthesis ---"
     $basic17Res = Invoke-CommandCapture -exe $cliExe -commandArgs @(
         "-m", $resolvedModelDir,
-        "--model-name", $ModelName17,
+        "--model-name", $ModelName17Custom,
         "--speaker", $Model17Speaker,
         "-t", "Hello world from qwen3 one point seven b.",
         "--temperature", "0",
@@ -631,7 +634,7 @@ if (-not $run17B) {
         Write-Host "--- CLI 1.7B voice cloning ---"
     $clone17Res = Invoke-CommandCapture -exe $cliExe -commandArgs @(
         "-m", $resolvedModelDir,
-        "--model-name", $ModelName17,
+        "--model-name", $ModelName17Base,
         "-t", "Hello world from cloned voice on one point seven b.",
         "-r", $refAudio,
         "--temperature", "0",
@@ -653,7 +656,7 @@ if (-not $run17B) {
     Write-Host "--- CLI 1.7B style: whisper ---"
     $styleWhisperRes = Invoke-CommandCapture -exe $cliExe -commandArgs @(
         "-m", $resolvedModelDir,
-        "--model-name", $ModelName17,
+        "--model-name", $ModelName17Custom,
         "--speaker", $Model17Speaker,
         "-t", "Please keep this between us.",
         "--instruct", "Whispering, very soft and quiet voice.",
@@ -673,7 +676,7 @@ if (-not $run17B) {
     Write-Host "--- CLI 1.7B style: angry shout ---"
     $styleAngryRes = Invoke-CommandCapture -exe $cliExe -commandArgs @(
         "-m", $resolvedModelDir,
-        "--model-name", $ModelName17,
+        "--model-name", $ModelName17Custom,
         "--speaker", $Model17Speaker,
         "-t", "This is unacceptable. Stop right now.",
         "--instruct", "Angry voice, shouting, high intensity.",

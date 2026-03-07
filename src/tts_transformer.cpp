@@ -311,6 +311,10 @@ bool TTSTransformer::load_model(const std::string & model_path) {
     }
     
     state_.compute_meta.resize(ggml_tensor_overhead() * QWEN3_TTS_MAX_NODES + ggml_graph_overhead());
+    state_.code_pred_compute_meta.resize(15);
+    for (int i = 0; i < 15; ++i) {
+        state_.code_pred_compute_meta[i].resize(ggml_tensor_overhead() * QWEN3_TTS_MAX_NODES + ggml_graph_overhead());
+    }
 
     if (!try_init_coreml_code_predictor(model_path)) {
         return false;
@@ -1122,7 +1126,12 @@ void TTSTransformer::maybe_reserve_scheduler_graphs(int32_t prefill_len, int32_t
     ok &= reserve_graph(build_prefill_forward_graph(prefill_len, 0), "talker prefill");
     ok &= reserve_graph(build_step_graph(std::max<int32_t>(0, required_ctx - 1)), "talker step");
     ok &= reserve_graph(build_code_pred_prefill_graph(), "code predictor prefill");
-    ok &= reserve_graph(build_code_pred_step_graph(15, 14), "code predictor step");
+    
+    for (int step = 1; step < 15; ++step) {
+        char name[32];
+        snprintf(name, sizeof(name), "code predictor step %d", step);
+        ok &= reserve_graph(build_code_pred_step_graph(15, step), name);
+    }
 
     if (ok) {
         state_.sched_reserved = true;
@@ -1957,8 +1966,8 @@ struct ggml_cgraph * TTSTransformer::build_code_pred_prefill_graph() {
     const int n_tokens = 2;
     
     struct ggml_init_params params = {
-        /*.mem_size   =*/ state_.compute_meta.size(),
-        /*.mem_buffer =*/ state_.compute_meta.data(),
+        /*.mem_size   =*/ state_.code_pred_compute_meta[0].size(),
+        /*.mem_buffer =*/ state_.code_pred_compute_meta[0].data(),
         /*.no_alloc   =*/ true,
     };
     
@@ -2135,8 +2144,8 @@ struct ggml_cgraph * TTSTransformer::build_code_pred_step_graph(int32_t n_past, 
     const int n_tokens = 1;
     
     struct ggml_init_params params = {
-        /*.mem_size   =*/ state_.compute_meta.size(),
-        /*.mem_buffer =*/ state_.compute_meta.data(),
+        /*.mem_size   =*/ state_.code_pred_compute_meta[generation_step].size(),
+        /*.mem_buffer =*/ state_.code_pred_compute_meta[generation_step].data(),
         /*.no_alloc   =*/ true,
     };
     
