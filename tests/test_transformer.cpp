@@ -471,12 +471,12 @@ int main(int argc, char ** argv) {
     printf("  +-------------------------------------+\n\n");
 
     if (fail_count > 0) {
-        printf("=== Some tests FAILED (exit 0 to allow analysis) ===\n");
+        printf("=== Some tests FAILED ===\n");
     } else if (warn_count > 0) {
         printf("=== All tests passed with warnings ===\n");
     } else {
         printf("=== All tests passed! ===\n");
     }
 
-    return 0;  // Always exit 0 to allow analysis of comparison results
+    return fail_count > 0 ? 1 : 0;
 }

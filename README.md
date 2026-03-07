@@ -283,9 +283,14 @@ uv run python scripts/generate_deterministic_reference.py
 # Windows: use PowerShell test runner
 .\scripts\run_all_tests.ps1
 
+# Optional: prepare/verify deterministic reference assets first
+.\scripts\prepare_test_assets.ps1 -GenerateMissing
+# (uses local .venv by default; add -InstallPythonDeps for first-time setup)
+.\scripts\prepare_test_assets.ps1 -GenerateMissing -InstallPythonDeps
+
 # Optional: build first, then test
 .\build.ps1 -Configuration Release
-.\scripts\run_all_tests.ps1 -Configuration Release
+.\scripts\run_all_tests.ps1 -Configuration Release -RequireComponentTests
 ```
 
 ### Test Results (F16 model)

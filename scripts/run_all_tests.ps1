@@ -7,7 +7,9 @@ param(
     [string]$OutputDir = "test_output",
     [switch]$BuildFirst,
     [switch]$BuildMissingTargets,
-    [switch]$RequireComponentTests
+    [switch]$RequireComponentTests,
+    [switch]$PrepareAssets,
+    [switch]$GenerateMissingAssets
 )
 
 Set-StrictMode -Version Latest
@@ -69,6 +71,19 @@ function Get-AllBuildTarget([string]$buildDir) {
         return "all"
     }
     return "ALL_BUILD"
+}
+
+function Write-PreflightStatus([string]$label, [string]$path, [bool]$required, [string]$hint) {
+    $exists = $path -and (Test-Path $path)
+    $tag = if ($exists) { "[OK]" } else { "[MISSING]" }
+    $color = if ($exists) { "Green" } else { "Yellow" }
+    $reqText = if ($required) { "required" } else { "optional" }
+    $displayPath = if ($path) { $path } else { "<not resolved>" }
+    Write-Host "$tag $label ($reqText): $displayPath" -ForegroundColor $color
+    if (-not $exists -and $hint) {
+        Write-Host "  -> $hint" -ForegroundColor DarkYellow
+    }
+    return $exists
 }
 
 function Write-OutputTail([string]$output, [int]$maxLines = 20) {
@@ -297,6 +312,22 @@ if ($BuildFirst) {
     }
 }
 
+if ($PrepareAssets) {
+    $assetScript = Join-Path $repoRoot "scripts/prepare_test_assets.ps1"
+    if (-not (Test-Path $assetScript)) {
+        throw "prepare_test_assets.ps1 not found at $assetScript"
+    }
+    Write-Host "Preparing test assets via prepare_test_assets.ps1 ..."
+    $assetArgs = @("-ModelDir", $resolvedModelDir, "-ReferenceDir", (Join-Path $repoRoot "reference"))
+    if ($GenerateMissingAssets) {
+        $assetArgs += "-GenerateMissing"
+    }
+    & $assetScript @assetArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "Asset preparation failed."
+    }
+}
+
 Write-Host "Running Windows test suite from $repoRoot"
 Write-Host "BuildDir: $resolvedBuildDir"
 Write-Host "Configuration: $Configuration"
@@ -313,7 +344,7 @@ $cliExe = Resolve-BinaryPath -name "qwen3-tts-cli" -buildDir $resolvedBuildDir -
 if (-not $tokenizerExe -or -not $encoderExe -or -not $transformerExe -or -not $decoderExe -or -not $cliExe) {
     if ($BuildMissingTargets) {
         Write-Host ""
-        Write-Host "Some binaries are missing. Attempting to build ALL_BUILD target ..." -ForegroundColor Yellow
+        Write-Host "Some binaries are missing. Attempting to build full target ..." -ForegroundColor Yellow
         $allTarget = Get-AllBuildTarget -buildDir $resolvedBuildDir
         Write-Host "Using build target: $allTarget"
         $buildArgs = @("--build", $resolvedBuildDir, "--target", $allTarget, "--parallel")
@@ -361,24 +392,6 @@ $decoderRef = Find-FirstExisting @(
     (Join-Path $repoRoot "reference/det_decoded_audio.bin")
 )
 
-Write-Section "Section 1: Component Tests"
-
-if ($tokenizerExe -and (Test-Path $ttsModel)) {
-    Invoke-CheckedTest -name "Tokenizer" -exe $tokenizerExe -commandArgs @("--model", $ttsModel) -successRegex "All tests passed"
-} else {
-    if ($RequireComponentTests) { Add-Fail "Tokenizer (binary or model missing)" } else { Add-Skip "Tokenizer (binary or model missing)" }
-}
-
-if ($encoderExe -and (Test-Path $ttsModel) -and $refAudio) {
-    $encoderArgs = @("--tokenizer", $ttsModel, "--audio", $refAudio)
-    if ($encoderRef) {
-        $encoderArgs += @("--reference", $encoderRef)
-    }
-    Invoke-CheckedTest -name "Encoder" -exe $encoderExe -commandArgs $encoderArgs -successRegex "All tests passed"
-} else {
-    if ($RequireComponentTests) { Add-Fail "Encoder (binary/model/reference audio missing)" } else { Add-Skip "Encoder (binary/model/reference audio missing)" }
-}
-
 $transformerReq = @(
     (Join-Path $repoRoot "reference/det_text_tokens.bin"),
     (Join-Path $repoRoot "reference/det_speaker_embedding.bin"),
@@ -386,22 +399,86 @@ $transformerReq = @(
     (Join-Path $repoRoot "reference/det_first_frame_logits.bin"),
     (Join-Path $repoRoot "reference/det_speech_codes.bin")
 )
-$hasTransformerRefs = $true
+$missingTransformerRefs = @()
 foreach ($f in $transformerReq) {
     if (-not (Test-Path $f)) {
-        $hasTransformerRefs = $false
-        break
+        $missingTransformerRefs += $f
+    }
+}
+$hasTransformerRefs = $missingTransformerRefs.Count -eq 0
+
+Write-Section "Section 0: Preflight"
+
+$strictMissingCount = 0
+
+$preflightChecks = @(
+    @{ Label = "CLI binary";                 Path = $cliExe;         Required = $false; Hint = "Run: pwsh -File .\build.ps1 -BuildAll -Configuration $Configuration" },
+    @{ Label = "Tokenizer test binary";      Path = $tokenizerExe;   Required = $RequireComponentTests; Hint = "Run: pwsh -File .\build.ps1 -BuildAll -Configuration $Configuration" },
+    @{ Label = "Encoder test binary";        Path = $encoderExe;     Required = $RequireComponentTests; Hint = "Run: pwsh -File .\build.ps1 -BuildAll -Configuration $Configuration" },
+    @{ Label = "Transformer test binary";    Path = $transformerExe; Required = $RequireComponentTests; Hint = "Run: pwsh -File .\build.ps1 -BuildAll -Configuration $Configuration" },
+    @{ Label = "Decoder test binary";        Path = $decoderExe;     Required = $RequireComponentTests; Hint = "Run: pwsh -File .\build.ps1 -BuildAll -Configuration $Configuration" },
+    @{ Label = "TTS model";                  Path = $ttsModel;       Required = $true;  Hint = "Place qwen3-tts-0.6b-f16.gguf under '$resolvedModelDir'." },
+    @{ Label = "Tokenizer model";            Path = $tokModel;       Required = $true;  Hint = "Place qwen3-tts-tokenizer-f16.gguf under '$resolvedModelDir'." },
+    @{ Label = "Reference audio";            Path = $refAudio;       Required = $RequireComponentTests; Hint = "Use -ReferenceAudio or place examples/readme_clone_input.wav." },
+    @{ Label = "Encoder reference embedding";Path = $encoderRef;     Required = $RequireComponentTests; Hint = "Run: pwsh -File .\scripts\prepare_test_assets.ps1 -GenerateMissing" },
+    @{ Label = "Decoder codes";              Path = $decoderCodes;   Required = $RequireComponentTests; Hint = "Run: pwsh -File .\scripts\prepare_test_assets.ps1 -GenerateMissing" },
+    @{ Label = "Decoder reference audio";    Path = $decoderRef;     Required = $RequireComponentTests; Hint = "Run: pwsh -File .\scripts\prepare_test_assets.ps1 -GenerateMissing" }
+)
+
+foreach ($check in $preflightChecks) {
+    $ok = Write-PreflightStatus -label $check.Label -path $check.Path -required ([bool]$check.Required) -hint $check.Hint
+    if ((-not $ok) -and [bool]$check.Required) {
+        $strictMissingCount++
     }
 }
 
+if ($RequireComponentTests) {
+    if ($missingTransformerRefs.Count -eq 0) {
+        Write-Host "[OK] Transformer deterministic references (required): all files present" -ForegroundColor Green
+    } else {
+        Write-Host "[MISSING] Transformer deterministic references (required): $($missingTransformerRefs.Count) file(s) missing" -ForegroundColor Yellow
+        foreach ($f in $missingTransformerRefs) {
+            Write-Host "  -> $f" -ForegroundColor DarkYellow
+        }
+        Write-Host "  -> Run: pwsh -File .\scripts\prepare_test_assets.ps1 -GenerateMissing" -ForegroundColor DarkYellow
+        $strictMissingCount += $missingTransformerRefs.Count
+    }
+}
+
+$strictPreflightFailed = $RequireComponentTests -and ($strictMissingCount -gt 0)
+if ($strictPreflightFailed) {
+    Add-Fail "Strict preflight failed: $strictMissingCount required prerequisite(s) missing."
+    Write-Host "Fix commands:" -ForegroundColor DarkYellow
+    Write-Host "  pwsh -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Configuration $Configuration -BuildAll" -ForegroundColor DarkYellow
+    Write-Host "  pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\prepare_test_assets.ps1 -GenerateMissing" -ForegroundColor DarkYellow
+}
+
+Write-Section "Section 1: Component Tests"
+
+if ($tokenizerExe -and (Test-Path $ttsModel)) {
+    [void](Invoke-CheckedTest -name "Tokenizer" -exe $tokenizerExe -commandArgs @("--model", $ttsModel) -successRegex "All tests passed")
+} else {
+    Add-Skip "Tokenizer (binary or model missing)"
+}
+
+if ($encoderExe -and (Test-Path $ttsModel) -and $refAudio) {
+    $encoderArgs = @("--tokenizer", $ttsModel, "--audio", $refAudio)
+    if ($encoderRef) {
+        $encoderArgs += @("--reference", $encoderRef)
+    }
+    [void](Invoke-CheckedTest -name "Encoder" -exe $encoderExe -commandArgs $encoderArgs -successRegex "All tests passed")
+} else {
+    Add-Skip "Encoder (binary/model/reference audio missing)"
+}
+
 if ($transformerExe -and (Test-Path $ttsModel) -and $hasTransformerRefs) {
-    Invoke-CheckedTest -name "Transformer deterministic" `
+    [void](Invoke-CheckedTest -name "Transformer deterministic" `
         -exe $transformerExe `
         -commandArgs @("--model", $ttsModel, "--ref-dir", (Join-Path $repoRoot "reference")) `
         -successRegex "=== All tests passed|=== All tests passed with warnings ===" `
-        -forbiddenRegex "FAIL:"
+        -forbiddenRegex "FAIL:")
 } else {
-    if ($RequireComponentTests) { Add-Fail "Transformer deterministic (binary/model/reference artifacts missing)" } else { Add-Skip "Transformer deterministic (binary/model/reference artifacts missing)" }
+    Add-Skip "Transformer deterministic (binary/model/reference artifacts missing)"
 }
 
 if ($decoderExe -and (Test-Path $tokModel) -and $decoderCodes) {
@@ -409,13 +486,13 @@ if ($decoderExe -and (Test-Path $tokModel) -and $decoderCodes) {
     if ($decoderRef) {
         $decoderArgs += @("--reference", $decoderRef)
     }
-    Invoke-CheckedTest -name "Decoder" `
+    [void](Invoke-CheckedTest -name "Decoder" `
         -exe $decoderExe `
         -commandArgs $decoderArgs `
         -successRegex "All tests completed|PASS: Decoded" `
-        -forbiddenRegex "FAIL:"
+        -forbiddenRegex "FAIL:")
 } else {
-    if ($RequireComponentTests) { Add-Fail "Decoder (binary/model/codes missing)" } else { Add-Skip "Decoder (binary/model/codes missing)" }
+    Add-Skip "Decoder (binary/model/codes missing)"
 }
 
 Write-Section "Section 2: CLI Output Regression Checks"

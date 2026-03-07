@@ -61,6 +61,8 @@ int main(int argc, char ** argv) {
     }
     
     printf("=== Audio Tokenizer Decoder Test ===\n\n");
+
+    int fail_count = 0;
     
     qwen3_tts::AudioTokenizerDecoder decoder;
     
@@ -107,6 +109,7 @@ int main(int argc, char ** argv) {
     std::vector<float> single_samples;
     if (!decoder.decode(codes_i32.data(), 1, single_samples)) {
         fprintf(stderr, "  FAIL (single frame): %s\n", decoder.get_error().c_str());
+        fail_count++;
     } else {
         printf("  Single frame: %zu samples, first 5: ", single_samples.size());
         for (int i = 0; i < 5 && i < (int)single_samples.size(); ++i) {
@@ -138,6 +141,7 @@ int main(int argc, char ** argv) {
             printf("  PASS: Saved %zu samples\n", samples.size());
         } else {
             fprintf(stderr, "  FAIL: Could not save output file\n");
+            fail_count++;
         }
         printf("\n");
     }
@@ -192,6 +196,7 @@ int main(int argc, char ** argv) {
             printf("  WARN: L2 distance < 0.1 (moderate match)\n");
         } else {
             printf("  FAIL: L2 distance >= 0.1 (poor match)\n");
+            fail_count++;
         }
         
         if (correlation > 0.95) {
@@ -202,10 +207,16 @@ int main(int argc, char ** argv) {
             printf("  WARN: Correlation > 0.5 (moderate)\n");
         } else {
             printf("  FAIL: Correlation <= 0.5 (poor)\n");
+            fail_count++;
         }
     }
     printf("\n");
-    
+
+    if (fail_count > 0) {
+        printf("=== Tests completed with FAILURES (%d) ===\n", fail_count);
+        return 1;
+    }
+
     printf("=== All tests completed ===\n");
     return 0;
 }

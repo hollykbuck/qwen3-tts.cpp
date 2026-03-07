@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
 import sys
 from pathlib import Path
@@ -25,13 +26,33 @@ import torch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MODEL_PATH = PROJECT_ROOT / "models" / "Qwen3-TTS-12Hz-0.6B-Base"
-REF_AUDIO_PATH = PROJECT_ROOT / "clone.wav"
 REF_TEXT_PATH = PROJECT_ROOT / "reference_text.txt"
 OUTPUT_DIR = PROJECT_ROOT / "reference"
 
 SYNTH_TEXT = "Hello."
 LANGUAGE = "English"
 MAX_NEW_TOKENS = 64
+
+
+def _resolve_reference_audio_path() -> Path:
+    env_path = os.environ.get("QWEN3_TTS_REF_AUDIO", "").strip()
+    candidates: list[Path] = []
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.extend(
+        [
+            PROJECT_ROOT / "clone.wav",
+            PROJECT_ROOT / "examples" / "readme_clone_input.wav",
+            PROJECT_ROOT / "my_voice_ref.wav",
+        ]
+    )
+    for path in candidates:
+        if path.exists():
+            return path
+    raise FileNotFoundError(
+        "Missing reference audio. Checked: "
+        + ", ".join(str(p) for p in candidates)
+    )
 
 
 def _as_numpy(
@@ -237,7 +258,9 @@ def main() -> int:
     print("Qwen3-TTS Deterministic Reference Generator")
     print("=" * 72)
 
-    for required_path in (MODEL_PATH, REF_AUDIO_PATH, REF_TEXT_PATH):
+    ref_audio_path = _resolve_reference_audio_path()
+
+    for required_path in (MODEL_PATH, ref_audio_path, REF_TEXT_PATH):
         if not required_path.exists():
             raise FileNotFoundError(f"Missing required path: {required_path}")
 
@@ -260,7 +283,7 @@ def main() -> int:
     input_id = input_ids_list[0].to(model.device)
 
     prompt_items = model.create_voice_clone_prompt(
-        ref_audio=str(REF_AUDIO_PATH),
+        ref_audio=str(ref_audio_path),
         ref_text=ref_text,
         x_vector_only_mode=True,
     )
@@ -387,7 +410,7 @@ def main() -> int:
 
     metadata = {
         "model_path": str(MODEL_PATH),
-        "reference_audio": str(REF_AUDIO_PATH),
+        "reference_audio": str(ref_audio_path),
         "reference_text": ref_text,
         "synthesis_text": SYNTH_TEXT,
         "language": LANGUAGE,

@@ -164,7 +164,9 @@ bash scripts/run_all_tests.sh           # Full suite
 ```
 
 ```powershell
+.\scripts\prepare_test_assets.ps1 -GenerateMissing
 .\scripts\run_all_tests.ps1             # Full suite on Windows
+.\scripts\run_all_tests.ps1 -RequireComponentTests
 .\build\Release\test_transformer.exe --ref-dir reference\
 ```
 

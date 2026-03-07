@@ -26,6 +26,27 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
+def resolve_reference_audio_path(project_root: Path) -> Path:
+    env_path = os.environ.get("QWEN3_TTS_REF_AUDIO", "").strip()
+    candidates: list[Path] = []
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.extend(
+        [
+            project_root / "clone.wav",
+            project_root / "examples" / "readme_clone_input.wav",
+            project_root / "my_voice_ref.wav",
+        ]
+    )
+    for path in candidates:
+        if path.exists():
+            return path
+    raise FileNotFoundError(
+        "Reference audio not found. Checked: "
+        + ", ".join(str(p) for p in candidates)
+    )
+
+
 def save_tensor_as_bin(tensor: torch.Tensor, path: str, name: str) -> dict:
     """Save tensor as raw binary and return metadata."""
     if isinstance(tensor, torch.Tensor):
@@ -52,7 +73,7 @@ def main():
     
     # Configuration
     model_path = PROJECT_ROOT / "models" / "Qwen3-TTS-12Hz-0.6B-Base"
-    ref_audio_path = PROJECT_ROOT / "clone.wav"
+    ref_audio_path = resolve_reference_audio_path(PROJECT_ROOT)
     ref_text_path = PROJECT_ROOT / "reference_text.txt"
     output_dir = PROJECT_ROOT / "reference"
     
