@@ -159,11 +159,6 @@ bool TextTokenizer::load_from_gguf(struct gguf_context * ctx) {
         user_token_id_ = find_token("Ġuser");
     }
     
-    system_token_id_ = find_token("system");
-    if (system_token_id_ < 0) {
-        system_token_id_ = find_token("Ġsystem");
-    }
-    
     // Newline token
     newline_token_id_ = find_token("Ċ");  // GPT-2 encoding for '\n'
     if (newline_token_id_ < 0) {
@@ -335,34 +330,13 @@ std::vector<int32_t> TextTokenizer::encode_instruct(const std::string & instruct
     return tokens;
 }
 
-std::vector<int32_t> TextTokenizer::encode_for_tts(const std::string & text, const std::string & instruction) const {
+std::vector<int32_t> TextTokenizer::encode_for_tts(const std::string & text) const {
     if (!loaded_) {
         return {};
     }
     
-    // Format: <|im_start|>system\n{instruction}<|im_end|>\n<|im_start|>assistant\n{text}<|im_end|>\n<|im_start|>assistant\n
+    // Format: <|im_start|>assistant\n{text}<|im_end|>\n<|im_start|>assistant\n
     std::vector<int32_t> tokens;
-    
-    if (!instruction.empty()) {
-        // <|im_start|>
-        tokens.push_back(config_.bos_token_id);
-        
-        // system
-        tokens.push_back(system_token_id_);
-        
-        // \n
-        tokens.push_back(newline_token_id_);
-        
-        // Encode the instruction
-        auto instr_tokens = encode(instruction);
-        tokens.insert(tokens.end(), instr_tokens.begin(), instr_tokens.end());
-        
-        // <|im_end|>
-        tokens.push_back(config_.eos_token_id);
-        
-        // \n
-        tokens.push_back(newline_token_id_);
-    }
 
     // <|im_start|>
     tokens.push_back(config_.bos_token_id);

@@ -481,7 +481,14 @@ tts_result Qwen3TTS::synthesize_internal(const std::string & text,
     
     // Step 2: Tokenize input text
     int64_t t_tokenize_start = get_time_ms();
-    std::vector<int32_t> text_tokens = tokenizer_.encode_for_tts(text, params.instruction);
+    // Match Python reference behavior:
+    // - main text uses assistant prompt format
+    // - optional style instruction is passed separately as instruct tokens
+    std::vector<int32_t> text_tokens = tokenizer_.encode_for_tts(text);
+    std::vector<int32_t> instruct_tokens;
+    if (!params.instruction.empty()) {
+        instruct_tokens = tokenizer_.encode_instruct(params.instruction);
+    }
     result.t_tokenize_ms = get_time_ms() - t_tokenize_start;
     sample_memory("synth/after-tokenize");
 
@@ -489,9 +496,16 @@ tts_result Qwen3TTS::synthesize_internal(const std::string & text,
         result.error_msg = "Failed to tokenize text";
         return result;
     }
+    if (!params.instruction.empty() && instruct_tokens.empty()) {
+        result.error_msg = "Failed to tokenize instruction";
+        return result;
+    }
 
     if (params.print_progress) {
         fprintf(stderr, "Text tokenized: %zu tokens\n", text_tokens.size());
+        if (!instruct_tokens.empty()) {
+            fprintf(stderr, "Instruction tokenized: %zu tokens\n", instruct_tokens.size());
+        }
         fprintf(stderr, "  Tokens: ");
         for (size_t i = 0; i < std::min(text_tokens.size(), (size_t)10); ++i) {
             fprintf(stderr, "%d ", text_tokens[i]);
@@ -521,7 +535,9 @@ tts_result Qwen3TTS::synthesize_internal(const std::string & text,
     if (!transformer_.generate(text_tokens.data(), (int32_t)text_tokens.size(),
                                speaker_embedding, params.max_audio_tokens, speech_codes,
                                params.language_id, params.repetition_penalty,
-                               params.temperature, params.top_k)) {
+                               params.temperature, params.top_k,
+                               instruct_tokens.empty() ? nullptr : instruct_tokens.data(),
+                               (int32_t) instruct_tokens.size())) {
         result.error_msg = "Failed to generate speech codes: " + transformer_.get_error();
         return result;
     }
