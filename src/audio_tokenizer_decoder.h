@@ -152,6 +152,12 @@ struct audio_decoder_state {
     ggml_backend_t backend_cpu = nullptr;
     ggml_backend_sched_t sched = nullptr;
     std::vector<uint8_t> compute_meta;
+    struct ggml_context * decode_graph_ctx = nullptr;
+    struct ggml_cgraph * decode_graph = nullptr;
+    struct ggml_tensor * decode_code_tensors[16] = {nullptr};
+    struct ggml_tensor * decode_positions_tensor = nullptr;
+    struct ggml_tensor * decode_audio_tensor = nullptr;
+    int32_t decode_graph_n_frames = 0;
 };
 
 // Audio tokenizer decoder (vocoder) class
@@ -181,6 +187,9 @@ public:
 private:
     // Build computation graph for decoding
     struct ggml_cgraph * build_graph(int32_t n_frames);
+    struct ggml_cgraph * build_graph_impl(int32_t n_frames, struct ggml_context ** graph_ctx_out);
+    void release_cached_decode_graph();
+    bool ensure_cached_decode_graph(int32_t n_frames);
     
     // Apply Snake activation: x + (1/alpha) * sin^2(alpha * x)
     struct ggml_tensor * apply_snake(struct ggml_context * ctx,
@@ -227,6 +236,8 @@ private:
     
     // Temporary storage for codes input
     std::vector<int32_t> codes_buf_;
+    std::vector<std::vector<int32_t>> codebook_input_bufs_;
+    std::vector<int32_t> positions_buf_;
 };
 
 // Free model resources

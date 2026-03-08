@@ -18,6 +18,7 @@ AudioTokenizerDecoder::~AudioTokenizerDecoder() {
 }
 
 void AudioTokenizerDecoder::unload_model() {
+    release_cached_decode_graph();
     free_audio_decoder_model(model_);
     
     if (state_.sched) {
@@ -35,6 +36,8 @@ void AudioTokenizerDecoder::unload_model() {
 
     state_.compute_meta.clear();
     codes_buf_.clear();
+    codebook_input_bufs_.clear();
+    positions_buf_.clear();
 }
 
 void AudioTokenizerDecoder::normalize_codebooks() {
@@ -372,6 +375,57 @@ bool AudioTokenizerDecoder::load_model(const std::string & model_path) {
     return true;
 }
 
+void AudioTokenizerDecoder::release_cached_decode_graph() {
+    state_.decode_graph = nullptr;
+    state_.decode_positions_tensor = nullptr;
+    state_.decode_audio_tensor = nullptr;
+    state_.decode_graph_n_frames = 0;
+    for (int i = 0; i < 16; ++i) {
+        state_.decode_code_tensors[i] = nullptr;
+    }
+    if (state_.decode_graph_ctx) {
+        ggml_free(state_.decode_graph_ctx);
+        state_.decode_graph_ctx = nullptr;
+    }
+}
+
+bool AudioTokenizerDecoder::ensure_cached_decode_graph(int32_t n_frames) {
+    if (state_.decode_graph && state_.decode_graph_n_frames == n_frames) {
+        return true;
+    }
+
+    release_cached_decode_graph();
+
+    state_.decode_graph = build_graph_impl(n_frames, &state_.decode_graph_ctx);
+    if (!state_.decode_graph || !state_.decode_graph_ctx) {
+        error_msg_ = "Failed to build cached decoder graph";
+        release_cached_decode_graph();
+        return false;
+    }
+
+    for (int cb = 0; cb < 16; ++cb) {
+        char name[32];
+        snprintf(name, sizeof(name), "codes_cb%d", cb);
+        state_.decode_code_tensors[cb] = ggml_graph_get_tensor(state_.decode_graph, name);
+        if (!state_.decode_code_tensors[cb]) {
+            error_msg_ = "Failed to find cached decoder input tensor for codebook " + std::to_string(cb);
+            release_cached_decode_graph();
+            return false;
+        }
+    }
+
+    state_.decode_positions_tensor = ggml_graph_get_tensor(state_.decode_graph, "positions");
+    state_.decode_audio_tensor = ggml_graph_get_tensor(state_.decode_graph, "audio");
+    if (!state_.decode_audio_tensor) {
+        error_msg_ = "Failed to find cached decoder output tensor";
+        release_cached_decode_graph();
+        return false;
+    }
+
+    state_.decode_graph_n_frames = n_frames;
+    return true;
+}
+
 struct ggml_tensor * AudioTokenizerDecoder::apply_snake(struct ggml_context * ctx,
                                                          struct ggml_tensor * x,
                                                          struct ggml_tensor * alpha,
@@ -622,6 +676,10 @@ struct ggml_tensor * AudioTokenizerDecoder::apply_decoder_block(struct ggml_cont
 }
 
 struct ggml_cgraph * AudioTokenizerDecoder::build_graph(int32_t n_frames) {
+    return build_graph_impl(n_frames, nullptr);
+}
+
+struct ggml_cgraph * AudioTokenizerDecoder::build_graph_impl(int32_t n_frames, struct ggml_context ** graph_ctx_out) {
     const auto & cfg = model_.config;
     
     struct ggml_init_params params = {
@@ -798,7 +856,11 @@ struct ggml_cgraph * AudioTokenizerDecoder::build_graph(int32_t n_frames) {
     
     ggml_build_forward_expand(gf, cur);
     
-    ggml_free(ctx0);
+    if (graph_ctx_out) {
+        *graph_ctx_out = ctx0;
+    } else {
+        ggml_free(ctx0);
+    }
     
     return gf;
 }
@@ -811,60 +873,55 @@ bool AudioTokenizerDecoder::decode(const int32_t * codes, int32_t n_frames,
     }
     
     const auto & cfg = model_.config;
-    
-    codes_buf_.resize(n_frames * cfg.n_codebooks);
-    for (int f = 0; f < n_frames; ++f) {
-        for (int cb = 0; cb < cfg.n_codebooks; ++cb) {
-            codes_buf_[cb + f * cfg.n_codebooks] = codes[f * cfg.n_codebooks + cb];
-        }
+
+    if (!ensure_cached_decode_graph(n_frames)) {
+        return false;
     }
-    
-    struct ggml_cgraph * gf = build_graph(n_frames);
+
+    struct ggml_cgraph * gf = state_.decode_graph;
     
     if (!ggml_backend_sched_alloc_graph(state_.sched, gf)) {
         error_msg_ = "Failed to allocate graph";
         return false;
     }
-    
-    std::vector<int32_t> cb_codes(n_frames);
-    for (int cb = 0; cb < 16; ++cb) {
-        char name[32];
-        snprintf(name, sizeof(name), "codes_cb%d", cb);
-        struct ggml_tensor * cb_tensor = ggml_graph_get_tensor(gf, name);
-        if (!cb_tensor) {
-            error_msg_ = "Failed to find codes tensor for codebook " + std::to_string(cb);
-            ggml_backend_sched_reset(state_.sched);
-            return false;
-        }
-        
-        for (int f = 0; f < n_frames; ++f) {
-            cb_codes[f] = codes_buf_[f * cfg.n_codebooks + cb];
-        }
-        
-        ggml_backend_tensor_set(cb_tensor, cb_codes.data(), 0, n_frames * sizeof(int32_t));
-    }
-    
 
-    
-    struct ggml_tensor * positions_tensor = ggml_graph_get_tensor(gf, "positions");
-    if (positions_tensor) {
-        std::vector<int32_t> positions(n_frames);
+    if ((int32_t) codebook_input_bufs_.size() != cfg.n_codebooks) {
+        codebook_input_bufs_.assign(cfg.n_codebooks, {});
+    }
+    for (int cb = 0; cb < cfg.n_codebooks; ++cb) {
+        codebook_input_bufs_[cb].resize(n_frames);
+    }
+
+    for (int f = 0; f < n_frames; ++f) {
+        const int32_t * frame_codes = codes + (size_t) f * cfg.n_codebooks;
+        for (int cb = 0; cb < cfg.n_codebooks; ++cb) {
+            codebook_input_bufs_[cb][f] = frame_codes[cb];
+        }
+    }
+
+    for (int cb = 0; cb < cfg.n_codebooks; ++cb) {
+        ggml_backend_tensor_set(state_.decode_code_tensors[cb], codebook_input_bufs_[cb].data(), 0,
+                                (size_t) n_frames * sizeof(int32_t));
+    }
+
+    if ((int32_t) positions_buf_.size() != n_frames) {
+        positions_buf_.resize(n_frames);
         for (int i = 0; i < n_frames; ++i) {
-            positions[i] = i;
+            positions_buf_[i] = i;
         }
-        ggml_backend_tensor_set(positions_tensor, positions.data(), 0, 
-                                n_frames * sizeof(int32_t));
     }
-    
+    if (state_.decode_positions_tensor) {
+        ggml_backend_tensor_set(state_.decode_positions_tensor, positions_buf_.data(), 0,
+                                (size_t) n_frames * sizeof(int32_t));
+    }
 
-    
     if (ggml_backend_sched_graph_compute(state_.sched, gf) != GGML_STATUS_SUCCESS) {
         error_msg_ = "Failed to compute graph";
         ggml_backend_sched_reset(state_.sched);
         return false;
     }
-    
-    struct ggml_tensor * audio_tensor = ggml_graph_get_tensor(gf, "audio");
+
+    struct ggml_tensor * audio_tensor = state_.decode_audio_tensor;
     if (!audio_tensor) {
         error_msg_ = "Failed to find audio tensor";
         ggml_backend_sched_reset(state_.sched);
