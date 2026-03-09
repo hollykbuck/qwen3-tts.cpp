@@ -167,6 +167,36 @@ Once the file split is stable, reduce header surface:
 - stop exposing model/state/block layout in public interfaces
 - consider `pimpl` only after the split is complete
 
+### Principle 4: Preserve history where practical
+
+Large file splits can destroy useful `git blame` history if they are done as a single copy-paste rewrite.
+
+Recommended approach:
+
+- extract one subsystem slice at a time
+- keep the first extraction mechanically simple
+- prefer `git mv` when one file is the obvious primary successor
+- accept normal Git copy detection for smaller helper files rather than forcing a noisy all-at-once duplication strategy
+
+The goal is to preserve useful history without creating a temporary explosion of duplicated code.
+
+### Principle 5: Lock a same-environment regression baseline before movement
+
+Before Phase 1 begins, capture a deterministic baseline in the current environment.
+
+Recommended baseline artifacts:
+
+- existing `test_transformer` output expectations
+- one fixed CLI smoke prompt under deterministic settings
+- optional debug trace or speech-code dump for the same prompt
+- optional same-machine hash of generated WAV and/or code output
+
+Important constraint:
+
+- bit-exact hashes are only a strong guard when backend, platform, and build configuration stay fixed
+
+Use hashes as a local refactor guard, not as a portable cross-environment invariant.
+
 ## Proposed Directory Layout
 
 Recommended source layout:
@@ -207,6 +237,7 @@ src/
 ```
 
 The existing public headers may remain in `src/` initially to minimize churn.
+Do not scaffold every file up front before code is moved. Create directories and implementation files incrementally as each extraction starts.
 
 ## Proposed Splits
 
@@ -366,13 +397,17 @@ Recommended changes:
    - public free-function declarations intended for consumers
 
 2. Move implementation-only structs into internal headers:
-   - `transformer_internal.h`
+   - `transformer_model_internal.h`
+   - `transformer_graph_internal.h`
+   - `transformer_debug_internal.h`
    - `encoder_internal.h`
    - `decoder_internal.h`
 
 3. Remove large private helper declarations from public headers where possible by:
    - introducing internal helper classes or free functions in internal headers
    - using internal namespaces within each subsystem
+
+Avoid replacing one oversized public header with one oversized internal header. Internal headers should also be split by concern when the subsystem is large enough to justify it.
 
 4. Consider `pimpl` only after the split is complete.
 
@@ -448,6 +483,12 @@ During refactor, preserve the following:
 
 Avoid combining refactor and optimization in the same changeset unless the optimization is trivial and mechanically obvious.
 
+Refactor commits should also stay mechanically legible:
+
+- separate file moves from behavioral edits where possible
+- separate header-surface reduction from implementation relocation
+- keep the first extraction in each subsystem intentionally conservative
+
 ## Validation Expectations
 
 After each major split:
@@ -458,6 +499,11 @@ After each major split:
 - for transformer work, run `test_transformer`
 - for pipeline changes, verify speaker embedding I/O and WAV save/load behavior
 
+Before each major split:
+
+- record the branch tip and target files being extracted
+- capture the same-environment deterministic baseline used for comparison
+
 ## Immediate Next Refactor Task
 
 Start with Phase 1 on `TTSTransformer`.
@@ -465,9 +511,10 @@ Start with Phase 1 on `TTSTransformer`.
 First concrete step:
 
 1. Create `src/transformer/transformer_internal.h`
-2. Move debug trace helpers into `src/transformer/transformer_debug.cpp`
-3. Move loader/config/tensor functions into `src/transformer/transformer_loader.cpp`
-4. Update `CMakeLists.txt` to compile the new transformer source list
-5. Rebuild and run transformer-focused tests before touching graph logic
+2. Capture a same-environment deterministic baseline for `test_transformer` and one CLI smoke prompt
+3. Move debug trace helpers into `src/transformer/transformer_debug.cpp`
+4. Move loader/config/tensor functions into `src/transformer/transformer_loader.cpp`
+5. Update `CMakeLists.txt` to compile the new transformer source list with private include paths for internal headers
+6. Rebuild and run transformer-focused tests before touching graph logic
 
 This keeps the first refactor pass mostly mechanical and low-risk while immediately shrinking the largest file.
