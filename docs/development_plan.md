@@ -1,6 +1,6 @@
 # Qwen3-TTS Development Plan
 
-Last updated: 2026-03-07
+Last updated: 2026-03-09
 
 ## Purpose
 
@@ -39,6 +39,7 @@ Maintain a single, current plan that separates:
 | Cross-speaker/perceptual validation for 1.7B | Open | Validate multiple built-in speakers and prompts after projection fix to guard against voice-specific regressions. |
 | M-RoPE position handling consistency | Partial | Remaining path consistency should still be audited and documented with explicit expected layouts per path. |
 | CUDA throughput benchmark refresh | Needs verification | Re-run and publish comparable CPU/CUDA benchmark data after the 1.7B predictor changes. |
+| Android / Snapdragon support | Backlog | Add Android NDK build support for the native library, portable model-path handling, and an initial CPU-first deployment path; evaluate Vulkan and Hexagon acceleration later for Snapdragon-class devices. |
 
 ## Performance Baselines and Targets
 
@@ -97,12 +98,27 @@ Exit criteria:
 - RTF target achieved for defined hardware tier.
 - Regression suite remains green.
 
+### M3: Android Enablement (Backlog)
+
+Scope:
+
+- Make the project build cleanly with the Android NDK as a shared native library.
+- Replace desktop-specific assumptions in model discovery and file loading with Android-safe paths and packaging guidance.
+- Ship an initial CPU-first integration path for mobile, then evaluate Vulkan and/or Hexagon offload on Snapdragon-class devices.
+
+Exit criteria:
+
+- `qwen3_tts` builds for at least one Android ABI with documented steps.
+- A minimal JNI or C API sample can load GGUF models from app-private storage and synthesize audio successfully on device.
+- Follow-up benchmark notes document whether Vulkan or Hexagon acceleration is viable for target Snapdragon devices.
+
 ## Immediate Next Actions
 
 1. Audit and document M-RoPE position writes in `tts_transformer.cpp`; add assertions where practical.
 2. Re-run baseline CPU and CUDA benchmarks with identical prompts, token limits, and reporting fields.
 3. Expand 1.7B cross-speaker/perceptual validation to include instruction-heavy prompts.
 4. Update this document with measured results and move verified items from "Open" to "Implemented".
+5. Keep Android support in backlog until correctness and benchmark gates are stable; when started, begin with NDK/shared-library portability and CPU-first on-device validation.
 
 ## Ownership and Update Rule
 
