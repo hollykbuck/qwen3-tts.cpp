@@ -30,6 +30,9 @@ Current branch status on `refactor/architecture-split`:
 - Completed: transformer private model/state/runtime members moved out of `src/tts_transformer.h` into `src/transformer/transformer_state_internal.h`
 - Completed: pipeline runtime/logging/memory/resample helpers extracted into `src/pipeline/pipeline_runtime.cpp`
 - Completed: pipeline model discovery, lazy-load policy, and capability helpers extracted into `src/pipeline/pipeline_models.cpp`
+- Completed: pipeline synthesis orchestration extracted into `src/pipeline/pipeline_synthesize.cpp`
+- Completed: WAV load/save helpers extracted into `src/common/audio_io.cpp`
+- Completed: speaker embedding parse/load/save helpers extracted into `src/common/speaker_embedding_io.cpp`
 - Confirmed after each completed step: local rebuild and test pass on the current Windows/CUDA workflow
 
 Current transformer split status:
@@ -41,8 +44,8 @@ Current transformer split status:
 
 Recommended next step from this point:
 
-- Continue Phase 2 by replacing the remaining private helper member declarations in `src/tts_transformer.h` with narrower internal helpers or a fuller pimpl boundary
-- Or continue the pipeline split by moving synthesis orchestration out of `src/qwen3_tts.cpp`
+- Start the decoder split by extracting model loading and codebook normalization out of `src/audio_tokenizer_decoder.cpp`
+- Or continue Phase 2 by replacing the remaining private helper member declarations in `src/tts_transformer.h` with narrower internal helpers or a fuller pimpl boundary
 
 Guardrail for ongoing work:
 
@@ -112,17 +115,9 @@ The struct/type exposure has now been moved behind `src/transformer/transformer_
 
 ### 3. `Qwen3TTS` mixes orchestration with unrelated utility code
 
-`src/qwen3_tts.cpp` currently contains:
+`src/qwen3_tts.cpp` is now effectively a thin facade translation unit.
 
-- GGML log filtering
-- process memory snapshot helpers
-- model path discovery and lazy-load policy
-- synthesis orchestration
-- WAV loading
-- WAV saving
-- resampling
-- speaker embedding text/binary parsing
-- speaker embedding serialization
+The runtime/logging, model-loading, and synthesis orchestration slices have been moved into `src/pipeline/`, and the remaining WAV/speaker-embedding utilities have been moved into `src/common/`.
 
 These are separable concerns that do not need to live in a single translation unit.
 
@@ -352,7 +347,6 @@ Proposed split:
   - `synthesize_with_speaker_embedding()`
   - `extract_speaker_embedding()`
   - `synthesize_internal()`
-  - `set_progress_callback()`
 
 - `src/pipeline/pipeline_runtime.cpp`
   - GGML log filtering
@@ -541,15 +535,13 @@ Before each major split:
 
 ## Immediate Next Refactor Task
 
-Start with Phase 1 on `TTSTransformer`.
+Start Phase 1 on `AudioTokenizerDecoder`.
 
 First concrete step:
 
-1. Create `src/transformer/transformer_internal.h`
-2. Capture a same-environment deterministic baseline for `test_transformer` and one CLI smoke prompt
-3. Move debug trace helpers into `src/transformer/transformer_debug.cpp`
-4. Move loader/config/tensor functions into `src/transformer/transformer_loader.cpp`
-5. Update `CMakeLists.txt` to compile the new transformer source list with private include paths for internal headers
-6. Rebuild and run transformer-focused tests before touching graph logic
+1. Create `src/decoder/decoder_internal.h` for decoder-private model/state structs
+2. Move model loading, codebook normalization, and unload helpers into `src/decoder/decoder_loader.cpp`
+3. Update `CMakeLists.txt` to compile the new decoder source list
+4. Rebuild and run the standard Windows/CUDA regression pass
 
-This keeps the first refactor pass mostly mechanical and low-risk while immediately shrinking the largest file.
+This keeps the next pass mechanical while starting on the largest remaining `.cpp` hotspot after the transformer and pipeline work.
