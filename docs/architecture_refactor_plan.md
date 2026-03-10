@@ -23,16 +23,18 @@ Current branch status on `refactor/architecture-split`:
 - Completed: transformer KV-cache and scheduler reservation lifecycle extracted into `src/transformer/transformer_cache.cpp`
 - Completed: transformer embedding lookup, named speaker resolution, and prefill embedding construction extracted into `src/transformer/transformer_embeddings.cpp`
 - Completed: talker graph construction extracted into `src/transformer/transformer_graph_talker.cpp`
+- Completed: code predictor graph construction extracted into `src/transformer/transformer_graph_code_pred.cpp`
+- Completed: talker runtime execution extracted into `src/transformer/transformer_runtime.cpp`
 - Confirmed after each completed step: local rebuild and test pass on the current Windows/CUDA workflow
 
 Current transformer split status:
 
-- Still in `src/tts_transformer.cpp`: code predictor graph builders, runtime execution, sampling, and autoregressive generation
-- Now moved out of `src/tts_transformer.cpp`: debug trace helpers, model load/unload path, GGUF config parsing, tensor creation, tensor data loading, CoreML loader hookup, KV-cache lifecycle, scheduler reserve warmup, embedding lookup helpers, named speaker lookup, prefill embedding construction, talker graph builders
+- Still in `src/tts_transformer.cpp`: code predictor runtime execution, sampling, and autoregressive generation
+- Now moved out of `src/tts_transformer.cpp`: debug trace helpers, model load/unload path, GGUF config parsing, tensor creation, tensor data loading, CoreML loader hookup, KV-cache lifecycle, scheduler reserve warmup, embedding lookup helpers, named speaker lookup, prefill embedding construction, talker graph builders, code predictor graph builders, talker runtime execution
 
 Recommended next step from this point:
 
-- Extract code predictor graph construction into `src/transformer/transformer_graph_code_pred.cpp`
+- Extract code predictor runtime helpers into `src/transformer/transformer_runtime.cpp` or a dedicated `transformer_runtime_code_pred.cpp` split
 
 Guardrail for ongoing work:
 
