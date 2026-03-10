@@ -88,6 +88,7 @@ target_link_libraries(text_tokenizer PUBLIC Threads::Threads)
 set(TTS_TRANSFORMER_SOURCES
     src/gguf_loader.cpp
     src/tts_transformer.cpp
+    src/transformer/transformer_cache.cpp
     src/transformer/transformer_debug.cpp
     src/transformer/transformer_loader.cpp
 )

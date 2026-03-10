@@ -1,6 +1,6 @@
 # Architecture Refactor Plan
 
-Last updated: 2026-03-09
+Last updated: 2026-03-10
 
 ## Purpose
 
@@ -20,16 +20,17 @@ Current branch status on `refactor/architecture-split`:
 - Completed: internal transformer helper boundary introduced in `src/transformer/transformer_internal.h`
 - Completed: debug trace implementation extracted into `src/transformer/transformer_debug.cpp`
 - Completed: transformer model loading/config/tensor setup extracted into `src/transformer/transformer_loader.cpp`
+- Completed: transformer KV-cache and scheduler reservation lifecycle extracted into `src/transformer/transformer_cache.cpp`
 - Confirmed after each completed step: local rebuild and test pass on the current Windows/CUDA workflow
 
 Current transformer split status:
 
-- Still in `src/tts_transformer.cpp`: KV-cache lifecycle, scheduler reservation, graph builders, runtime execution, sampling, and autoregressive generation
-- Now moved out of `src/tts_transformer.cpp`: debug trace helpers, model load/unload path, GGUF config parsing, tensor creation, tensor data loading, CoreML loader hookup
+- Still in `src/tts_transformer.cpp`: embedding lookup helpers, prefill embedding construction, graph builders, runtime execution, sampling, and autoregressive generation
+- Now moved out of `src/tts_transformer.cpp`: debug trace helpers, model load/unload path, GGUF config parsing, tensor creation, tensor data loading, CoreML loader hookup, KV-cache lifecycle, scheduler reserve warmup
 
 Recommended next step from this point:
 
-- Extract cache and scheduler lifecycle code into `src/transformer/transformer_cache.cpp`
+- Extract embedding and prefill construction helpers into `src/transformer/transformer_embeddings.cpp`
 
 Guardrail for ongoing work:
 
