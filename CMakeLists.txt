@@ -147,6 +147,7 @@ target_link_libraries(audio_tokenizer_decoder PUBLIC Threads::Threads)
 
 # Qwen3 TTS library (full pipeline)
 add_library(qwen3_tts STATIC
+    src/pipeline/pipeline_models.cpp
     src/pipeline/pipeline_runtime.cpp
     src/qwen3_tts.cpp
     src/qwen3_tts_c.cpp
