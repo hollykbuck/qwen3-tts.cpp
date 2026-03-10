@@ -25,16 +25,18 @@ Current branch status on `refactor/architecture-split`:
 - Completed: talker graph construction extracted into `src/transformer/transformer_graph_talker.cpp`
 - Completed: code predictor graph construction extracted into `src/transformer/transformer_graph_code_pred.cpp`
 - Completed: talker runtime execution extracted into `src/transformer/transformer_runtime.cpp`
+- Completed: code predictor runtime execution extracted into `src/transformer/transformer_runtime_code_pred.cpp`
+- Completed: outer autoregressive generation extracted into `src/transformer/transformer_generate.cpp`
 - Confirmed after each completed step: local rebuild and test pass on the current Windows/CUDA workflow
 
 Current transformer split status:
 
-- Still in `src/tts_transformer.cpp`: code predictor runtime execution, sampling, and autoregressive generation
-- Now moved out of `src/tts_transformer.cpp`: debug trace helpers, model load/unload path, GGUF config parsing, tensor creation, tensor data loading, CoreML loader hookup, KV-cache lifecycle, scheduler reserve warmup, embedding lookup helpers, named speaker lookup, prefill embedding construction, talker graph builders, code predictor graph builders, talker runtime execution
+- Still in `src/tts_transformer.cpp`: constructor/destructor facade, legacy forward wrappers, and free helpers
+- Now moved out of `src/tts_transformer.cpp`: debug trace helpers, model load/unload path, GGUF config parsing, tensor creation, tensor data loading, CoreML loader hookup, KV-cache lifecycle, scheduler reserve warmup, embedding lookup helpers, named speaker lookup, prefill embedding construction, talker graph builders, code predictor graph builders, talker runtime execution, code predictor runtime execution, outer autoregressive generation
 
 Recommended next step from this point:
 
-- Extract code predictor runtime helpers into `src/transformer/transformer_runtime.cpp` or a dedicated `transformer_runtime_code_pred.cpp` split
+- Begin Phase 2 by moving remaining transformer implementation detail out of `src/tts_transformer.h` into internal headers
 
 Guardrail for ongoing work:
 

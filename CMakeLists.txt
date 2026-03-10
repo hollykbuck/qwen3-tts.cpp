@@ -95,6 +95,8 @@ set(TTS_TRANSFORMER_SOURCES
     src/transformer/transformer_graph_talker.cpp
     src/transformer/transformer_loader.cpp
     src/transformer/transformer_runtime.cpp
+    src/transformer/transformer_runtime_code_pred.cpp
+    src/transformer/transformer_generate.cpp
 )
 if(APPLE AND QWEN3_TTS_COREML)
     list(APPEND TTS_TRANSFORMER_SOURCES src/coreml_code_predictor.mm)
