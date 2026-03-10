@@ -90,6 +90,7 @@ set(TTS_TRANSFORMER_SOURCES
     src/tts_transformer.cpp
     src/transformer/transformer_cache.cpp
     src/transformer/transformer_debug.cpp
+    src/transformer/transformer_embeddings.cpp
     src/transformer/transformer_loader.cpp
 )
 if(APPLE AND QWEN3_TTS_COREML)
