@@ -77,7 +77,7 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
 #ifdef QWEN3_TTS_TIMING
     t0 = clk::now();
 #endif
-    if (!build_prefill_graph(text_tokens, n_tokens, speaker_embd, language_id,
+    if (!transformer_internal::ops::build_prefill_graph(*this, text_tokens, n_tokens, speaker_embd, language_id,
                              prefill_embd, trailing_text_hidden, tts_pad_embed,
                              instruct_tokens, n_instruct_tokens)) {
         return false;
@@ -120,7 +120,7 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
             return false;
         }
     }
-    maybe_reserve_scheduler_graphs(prefill_len, required_ctx);
+    transformer_internal::ops::maybe_reserve_scheduler_graphs(*this, prefill_len, required_ctx);
 
     std::vector<float> hidden_out;
     std::vector<float> logits;
@@ -296,7 +296,7 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
 #ifdef QWEN3_TTS_TIMING
         t0 = clk::now();
 #endif
-        if (!lookup_single_embedding_row(impl_->model.codec_embd, frame_codes[0], embd_row.data())) {
+        if (!transformer_internal::ops::lookup_single_embedding_row(*this, impl_->model.codec_embd, frame_codes[0], embd_row.data())) {
             return false;
         }
         for (int32_t h = 0; h < cfg.hidden_size; ++h) {
@@ -305,7 +305,7 @@ bool TTSTransformer::generate(const int32_t * text_tokens, int32_t n_tokens,
 
         for (int cb = 1; cb < cfg.n_codebooks; ++cb) {
             int32_t code_token = frame_codes[cb];
-            if (!lookup_single_embedding_row(impl_->model.code_pred_embd[cb - 1], code_token, embd_row.data())) {
+            if (!transformer_internal::ops::lookup_single_embedding_row(*this, impl_->model.code_pred_embd[cb - 1], code_token, embd_row.data())) {
                 return false;
             }
             for (int32_t h = 0; h < cfg.hidden_size; ++h) {

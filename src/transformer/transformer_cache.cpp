@@ -1,5 +1,6 @@
 #include "tts_transformer.h"
 #include "transformer/transformer_state_internal.h"
+#include "transformer/transformer_internal.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -127,20 +128,22 @@ void TTSTransformer::clear_code_pred_kv_cache() {
     impl_->state.code_pred_cache.n_used = 0;
 }
 
-void TTSTransformer::maybe_reserve_scheduler_graphs(int32_t prefill_len, int32_t required_ctx) {
-    if (!impl_->state.sched) {
+void transformer_internal::ops::maybe_reserve_scheduler_graphs(TTSTransformer & self, int32_t prefill_len, int32_t required_ctx) {
+    auto & impl = self.impl_;
+
+    if (!impl->state.sched) {
         return;
     }
-    if (impl_->state.sched_reserve_failed) {
+    if (impl->state.sched_reserve_failed) {
         return;
     }
-    if (impl_->state.code_pred_cache.n_ctx < 16) {
+    if (impl->state.code_pred_cache.n_ctx < 16) {
         return;
     }
 
-    if (impl_->state.sched_reserved &&
-        impl_->state.sched_reserved_ctx >= required_ctx &&
-        impl_->state.sched_reserved_prefill_len >= prefill_len) {
+    if (impl->state.sched_reserved &&
+        impl->state.sched_reserved_ctx >= required_ctx &&
+        impl->state.sched_reserved_prefill_len >= prefill_len) {
         return;
     }
 
@@ -152,8 +155,8 @@ void TTSTransformer::maybe_reserve_scheduler_graphs(int32_t prefill_len, int32_t
             }
             return false;
         }
-        const bool ok = ggml_backend_sched_reserve(impl_->state.sched, g);
-        ggml_backend_sched_reset(impl_->state.sched);
+        const bool ok = ggml_backend_sched_reserve(impl->state.sched, g);
+        ggml_backend_sched_reset(impl->state.sched);
         if (!ok && first_failed_graph.empty()) {
             first_failed_graph = name;
         }
@@ -161,24 +164,24 @@ void TTSTransformer::maybe_reserve_scheduler_graphs(int32_t prefill_len, int32_t
     };
 
     bool ok = true;
-    ok &= reserve_graph(build_prefill_forward_graph(prefill_len, 0), "talker prefill");
-    ok &= reserve_graph(build_step_graph(std::max<int32_t>(0, required_ctx - 1)), "talker step");
-    ok &= reserve_graph(build_code_pred_prefill_graph(), "code predictor prefill");
+    ok &= reserve_graph(build_prefill_forward_graph(self, prefill_len, 0), "talker prefill");
+    ok &= reserve_graph(build_step_graph(self, std::max<int32_t>(0, required_ctx - 1)), "talker step");
+    ok &= reserve_graph(build_code_pred_prefill_graph(self), "code predictor prefill");
 
     for (int step = 1; step < 15; ++step) {
         char name[32];
         snprintf(name, sizeof(name), "code predictor step %d", step);
-        ok &= reserve_graph(build_code_pred_step_graph(15, step), name);
+        ok &= reserve_graph(build_code_pred_step_graph(self, 15, step), name);
     }
 
     if (ok) {
-        impl_->state.sched_reserved = true;
-        impl_->state.sched_reserve_failed = false;
-        impl_->state.sched_reserved_ctx = required_ctx;
-        impl_->state.sched_reserved_prefill_len = prefill_len;
+        impl->state.sched_reserved = true;
+        impl->state.sched_reserve_failed = false;
+        impl->state.sched_reserved_ctx = required_ctx;
+        impl->state.sched_reserved_prefill_len = prefill_len;
     } else {
-        impl_->state.sched_reserved = false;
-        impl_->state.sched_reserve_failed = true;
+        impl->state.sched_reserved = false;
+        impl->state.sched_reserve_failed = true;
         const char * graph_name = first_failed_graph.empty() ? "unknown graph" : first_failed_graph.c_str();
         fprintf(stderr,
                 "  Scheduler reserve failed at %s; disabling reserve warmup and using dynamic graph allocation\n",

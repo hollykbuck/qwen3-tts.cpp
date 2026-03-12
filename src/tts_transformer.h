@@ -12,6 +12,9 @@ struct gguf_context;
 
 namespace qwen3_tts {
 struct tts_transformer_private;
+namespace transformer_internal {
+struct ops;
+}
 
 // TTS Transformer configuration (Qwen2-based Talker)
 struct tts_transformer_config {
@@ -172,56 +175,7 @@ public:
                             std::vector<float> & output);
     
 private:
-    bool try_init_coreml_code_predictor(const std::string & model_path);
-    bool predict_codes_autoregressive_coreml(const float * hidden, int32_t codebook_0_token,
-                                             std::vector<int32_t> & output,
-                                             float temperature,
-                                             int32_t top_k,
-                                             int32_t trace_frame);
-
-    bool build_prefill_graph(const int32_t * text_tokens, int32_t n_tokens,
-                             const float * speaker_embd, int32_t language_id,
-                             std::vector<float> & prefill_embd,
-                             std::vector<float> & trailing_text_hidden,
-                             std::vector<float> & tts_pad_embed,
-                             const int32_t * instruct_tokens = nullptr,
-                             int32_t n_instruct_tokens = 0);
-
-    struct ggml_cgraph * build_prefill_forward_graph(int32_t n_tokens, int32_t n_past);
-
-    struct ggml_cgraph * build_step_graph(int32_t n_past);
-
-    bool project_text_tokens(const int32_t * text_tokens, int32_t n_tokens,
-                             std::vector<float> & output);
-
-    bool lookup_embedding_rows(struct ggml_tensor * embedding, const int32_t * token_ids,
-                               int32_t n_tokens, const char * input_name,
-                               const char * output_name, std::vector<float> & output);
-    bool lookup_single_embedding_row(struct ggml_tensor * embedding, int32_t token_id,
-                                     float * out_row);
-    
-    // Build computation graph for code predictor
-    struct ggml_cgraph * build_code_pred_graph(int32_t n_prev_codes);
-    
-    // Build computation graph for single-step autoregressive code predictor
-    // n_past: number of tokens already in KV cache (0-14)
-    // generation_step: which codebook we're predicting (0-14)
-    struct ggml_cgraph * build_code_pred_step_graph(int32_t n_past, int32_t generation_step);
-    
-    // Build computation graph for 2-token prefill of code predictor
-    // Processes [past_hidden, codec_embd(codebook_0_token)] together
-    struct ggml_cgraph * build_code_pred_prefill_graph();
-
-    void maybe_reserve_scheduler_graphs(int32_t prefill_len, int32_t required_ctx);
-    
-    // Parse hyperparameters from GGUF
-    bool parse_config(struct gguf_context * ctx);
-    
-    // Create tensor structures
-    bool create_tensors(struct gguf_context * ctx);
-    
-    // Load tensor data from file
-    bool load_tensor_data(const std::string & path, struct gguf_context * ctx);
+    friend struct transformer_internal::ops;
 
     std::unique_ptr<tts_transformer_private> impl_;
     std::string error_msg_;

@@ -1,5 +1,6 @@
 #include "tts_transformer.h"
 #include "transformer/transformer_state_internal.h"
+#include "transformer/transformer_internal.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -43,7 +44,7 @@ bool TTSTransformer::forward_prefill(const float * prefill_embd, int32_t n_token
 #ifdef QWEN3_TTS_TIMING
     t0 = clk::now();
 #endif
-    struct ggml_cgraph * gf = build_prefill_forward_graph(n_tokens, n_past);
+    struct ggml_cgraph * gf = transformer_internal::ops::build_prefill_forward_graph(*this, n_tokens, n_past);
 #ifdef QWEN3_TTS_TIMING
     t1 = clk::now();
     if (impl_->timing) impl_->timing->t_prefill_graph_build_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -173,7 +174,7 @@ bool TTSTransformer::forward_text(const int32_t * text_tokens, int32_t n_tokens,
     }
 
     std::vector<float> projected;
-    if (!project_text_tokens(text_tokens, n_tokens, projected)) {
+    if (!transformer_internal::ops::project_text_tokens(*this, text_tokens, n_tokens, projected)) {
         return false;
     }
 
@@ -222,7 +223,7 @@ bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
 #ifdef QWEN3_TTS_TIMING
     t0 = clk::now();
 #endif
-    struct ggml_cgraph * gf = build_step_graph(n_past);
+    struct ggml_cgraph * gf = transformer_internal::ops::build_step_graph(*this, n_past);
 #ifdef QWEN3_TTS_TIMING
     t1 = clk::now();
     if (impl_->timing) impl_->timing->t_talker_graph_build_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -334,7 +335,7 @@ bool TTSTransformer::forward_step(const float * step_embd, int32_t n_past,
 bool TTSTransformer::forward_codec(int32_t codec_token, int32_t n_past,
                                    std::vector<float> & output) {
     std::vector<float> codec_row;
-    if (!lookup_embedding_rows(impl_->model.codec_embd, &codec_token, 1,
+    if (!transformer_internal::ops::lookup_embedding_rows(*this, impl_->model.codec_embd, &codec_token, 1,
                                "inp_legacy_codec_token", "legacy_codec_row",
                                codec_row)) {
         return false;

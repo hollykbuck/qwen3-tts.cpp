@@ -28,6 +28,7 @@ Current branch status on `refactor/architecture-split`:
 - Completed: code predictor runtime execution extracted into `src/transformer/transformer_runtime_code_pred.cpp`
 - Completed: outer autoregressive generation extracted into `src/transformer/transformer_generate.cpp`
 - Completed: transformer private model/state/runtime members moved out of `src/tts_transformer.h` into `src/transformer/transformer_state_internal.h`
+- Completed: public transformer header no longer carries private helper member declarations; those now route through `transformer_internal::ops` in `src/transformer/transformer_internal.h`
 - Completed: pipeline runtime/logging/memory/resample helpers extracted into `src/pipeline/pipeline_runtime.cpp`
 - Completed: pipeline model discovery, lazy-load policy, and capability helpers extracted into `src/pipeline/pipeline_models.cpp`
 - Completed: pipeline synthesis orchestration extracted into `src/pipeline/pipeline_synthesize.cpp`
@@ -45,15 +46,15 @@ Current branch status on `refactor/architecture-split`:
 
 Current transformer split status:
 
-- Still in `src/tts_transformer.h`: private helper member declarations for graph/build/runtime operations
 - Still in `src/tts_transformer.cpp`: constructor/destructor facade, legacy forward wrappers, and free helpers
 - Now moved out of `src/tts_transformer.cpp`: debug trace helpers, model load/unload path, GGUF config parsing, tensor creation, tensor data loading, CoreML loader hookup, KV-cache lifecycle, scheduler reserve warmup, embedding lookup helpers, named speaker lookup, prefill embedding construction, talker graph builders, code predictor graph builders, talker runtime execution, code predictor runtime execution, outer autoregressive generation
-- Now moved out of `src/tts_transformer.h`: `transformer_layer`, `tts_transformer_model`, `tts_transformer_state`, `tts_kv_cache`, timing state, CoreML/runtime members, and GGML/GGUF-heavy private storage details
+- Now moved out of `src/tts_transformer.h`: `transformer_layer`, `tts_transformer_model`, `tts_transformer_state`, `tts_kv_cache`, timing state, CoreML/runtime members, GGML/GGUF-heavy private storage details, and the former private graph/build/runtime helper declarations
+- Remaining transformer cleanup is mostly optional internal boundary polish rather than a blocking structural split
 
 Recommended next step from this point:
 
-- Continue Phase 2 by replacing the remaining private helper member declarations in `src/tts_transformer.h` with narrower internal helpers or a fuller pimpl boundary
-- Or begin the encoder split by separating frontend DSP from GGUF loading and runtime execution
+- Begin the encoder split by separating frontend DSP from GGUF loading and runtime execution
+- Keep the transformer surface stable unless a small follow-up cleanup falls out naturally during encoder work
 
 Guardrail for ongoing work:
 
@@ -78,7 +79,7 @@ Measured source file sizes in `src/`:
 | File | Lines | Notes |
 |---|---:|---|
 | `src/audio_tokenizer_encoder.cpp` | 712 | DSP frontend plus GGML runtime in one file |
-| `src/tts_transformer.h` | 212 | Public header still carries many private helper declarations |
+| `src/tts_transformer.h` | 172 | Public header is materially smaller after helper-declaration cleanup |
 | `src/decoder/decoder_layers.cpp` | 192 | Decoder layer helper implementations are now isolated |
 | `src/qwen3_tts.h` | 173 | Public facade is stable after pipeline/common splits |
 | `src/decoder/decoder_graph.cpp` | 145 | Decoder graph assembly is now isolated |
@@ -93,7 +94,7 @@ Measured source file sizes in `src/`:
 
 ### 1. `TTSTransformer` has too many responsibilities
 
-`src/tts_transformer.cpp` currently owns all of the following:
+Historically, the transformer implementation owned all of the following in one place:
 
 - Debug trace configuration and binary dump helpers
 - GGUF config parsing
@@ -111,7 +112,7 @@ Measured source file sizes in `src/`:
 - Sampling helpers
 - Outer autoregressive generation loop
 
-This is the single biggest refactor target.
+This is no longer concentrated in one translation unit. The remaining transformer work is mainly boundary cleanup, while the encoder file is now the largest unsplit implementation hotspot.
 
 ### 2. The public transformer header is carrying implementation-only data
 
@@ -123,7 +124,7 @@ This is the single biggest refactor target.
 - `transformer_layer`
 - most private helper declarations
 
-The struct/type exposure has now been moved behind `src/transformer/transformer_state_internal.h`, but the public header still carries a large set of private helper member declarations.
+The struct/type exposure is now behind `src/transformer/transformer_state_internal.h`, and the former private helper declarations now live behind the internal `transformer_internal::ops` boundary. The public header is no longer the primary structural problem.
 
 ### 3. `Qwen3TTS` mixes orchestration with unrelated utility code
 
