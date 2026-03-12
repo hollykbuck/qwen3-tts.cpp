@@ -1,6 +1,6 @@
 # Architecture Refactor Plan
 
-Last updated: 2026-03-10
+Last updated: 2026-03-12
 
 ## Purpose
 
@@ -35,6 +35,8 @@ Current branch status on `refactor/architecture-split`:
 - Completed: speaker embedding parse/load/save helpers extracted into `src/common/speaker_embedding_io.cpp`
 - Completed: decoder-private model/state/layout structs moved into `src/decoder/decoder_internal.h`
 - Completed: decoder model loading, codebook normalization, and unload lifecycle extracted into `src/decoder/decoder_loader.cpp`
+- Completed: decoder layer helper implementations extracted into `src/decoder/decoder_layers.cpp`
+- Completed: decoder graph construction extracted into `src/decoder/decoder_graph.cpp`
 - Confirmed after each completed step: local rebuild and test pass on the current Windows/CUDA workflow
 
 Current transformer split status:
@@ -46,7 +48,7 @@ Current transformer split status:
 
 Recommended next step from this point:
 
-- Continue the decoder split by extracting layer helper implementations out of `src/audio_tokenizer_decoder.cpp` into `src/decoder/decoder_layers.cpp`
+- Continue the decoder split by extracting decode input marshaling and scheduler/compute/output handling into narrower runtime helpers or a dedicated `src/decoder/decoder_runtime.cpp`
 - Or continue Phase 2 by replacing the remaining private helper member declarations in `src/tts_transformer.h` with narrower internal helpers or a fuller pimpl boundary
 
 Guardrail for ongoing work:
@@ -72,9 +74,11 @@ Measured source file sizes in `src/`:
 | File | Lines | Notes |
 |---|---:|---|
 | `src/audio_tokenizer_encoder.cpp` | 712 | DSP frontend plus GGML runtime in one file |
-| `src/audio_tokenizer_decoder.cpp` | 543 | Graph construction, layer helpers, and runtime remain coupled |
 | `src/tts_transformer.h` | 212 | Public header still carries many private helper declarations |
+| `src/decoder/decoder_layers.cpp` | 192 | Decoder layer helper implementations are now isolated |
 | `src/qwen3_tts.h` | 173 | Public facade is stable after pipeline/common splits |
+| `src/decoder/decoder_graph.cpp` | 142 | Decoder graph assembly is now isolated |
+| `src/audio_tokenizer_decoder.cpp` | 111 | Runtime/cache logic remains coupled in one file |
 | `src/audio_tokenizer_decoder.h` | 106 | Smaller, but still carries decoder-private helper declarations |
 | `src/tts_transformer.cpp` | 58 | Thin facade/free-helper translation unit after Phase 1 split |
 | `src/qwen3_tts.cpp` | 8 | Thin facade translation unit |
