@@ -135,11 +135,11 @@ target_link_libraries(audio_tokenizer_encoder PUBLIC Threads::Threads)
 
 # Audio tokenizer decoder library (GGML-based)
 add_library(audio_tokenizer_decoder STATIC
+    src/decoder/decoder_cache.cpp
     src/decoder/decoder_graph.cpp
     src/decoder/decoder_layers.cpp
     src/decoder/decoder_loader.cpp
     src/decoder/decoder_runtime.cpp
-    src/audio_tokenizer_decoder.cpp
     src/gguf_loader.cpp
 )
 target_include_directories(audio_tokenizer_decoder PUBLIC

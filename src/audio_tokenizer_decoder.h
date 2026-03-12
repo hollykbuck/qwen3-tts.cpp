@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -9,6 +10,12 @@ struct ggml_tensor;
 struct ggml_cgraph;
 
 namespace qwen3_tts {
+
+struct pre_tfm_layer;
+struct upsample_block;
+struct residual_block;
+struct decoder_block;
+struct audio_decoder_private;
 
 // Audio tokenizer decoder (vocoder) configuration
 struct audio_decoder_config {
@@ -26,12 +33,6 @@ struct audio_decoder_config {
     float rms_norm_eps = 1e-5f;
     float rope_theta = 10000.0f;
 };
-
-} // namespace qwen3_tts
-
-#include "decoder/decoder_internal.h"
-
-namespace qwen3_tts {
 
 // Audio tokenizer decoder (vocoder) class
 // Decodes discrete audio codes to waveform
@@ -53,9 +54,9 @@ public:
     bool decode(const int32_t * codes, int32_t n_frames,
                 std::vector<float> & samples);
     
-    const audio_decoder_config & get_config() const { return model_.config; }
+    const audio_decoder_config & get_config() const;
     
-    const std::string & get_error() const { return error_msg_; }
+    const std::string & get_error() const;
     
 private:
     // Build computation graph for decoding
@@ -96,21 +97,14 @@ private:
     
     // Apply decoder block (Snake + ConvTranspose + Residuals)
     struct ggml_tensor * apply_decoder_block(struct ggml_context * ctx,
-                                              struct ggml_tensor * x,
-                                              const decoder_block & block,
-                                              int upsample_rate,
-                                              int block_idx);
+                                               struct ggml_tensor * x,
+                                               const decoder_block & block,
+                                               int upsample_rate,
+                                               int block_idx);
     
     void normalize_codebooks();
-    
-    audio_decoder_model model_;
-    audio_decoder_state state_;
-    std::string error_msg_;
-    
-    // Temporary storage for codes input
-    std::vector<int32_t> codes_buf_;
-    std::vector<std::vector<int32_t>> codebook_input_bufs_;
-    std::vector<int32_t> positions_buf_;
+
+    std::unique_ptr<audio_decoder_private> impl_;
 };
 
 } // namespace qwen3_tts

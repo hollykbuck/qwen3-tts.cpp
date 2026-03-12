@@ -37,6 +37,10 @@ Current branch status on `refactor/architecture-split`:
 - Completed: decoder model loading, codebook normalization, and unload lifecycle extracted into `src/decoder/decoder_loader.cpp`
 - Completed: decoder layer helper implementations extracted into `src/decoder/decoder_layers.cpp`
 - Completed: decoder graph construction extracted into `src/decoder/decoder_graph.cpp`
+- Completed: decoder cached-graph lifecycle extracted into `src/decoder/decoder_cache.cpp`
+- Completed: decoder runtime execution extracted into `src/decoder/decoder_runtime.cpp`
+- Completed: decoder private model/state/scratch storage moved behind `src/decoder/decoder_state_internal.h`
+- Completed: public decoder header no longer includes `src/decoder/decoder_internal.h`
 - Confirmed after each completed step: local rebuild and test pass on the current Windows/CUDA workflow
 
 Current transformer split status:
@@ -48,8 +52,8 @@ Current transformer split status:
 
 Recommended next step from this point:
 
-- Continue the decoder split by extracting decode input marshaling and scheduler/compute/output handling into narrower runtime helpers or a dedicated `src/decoder/decoder_runtime.cpp`
-- Or continue Phase 2 by replacing the remaining private helper member declarations in `src/tts_transformer.h` with narrower internal helpers or a fuller pimpl boundary
+- Continue Phase 2 by replacing the remaining private helper member declarations in `src/tts_transformer.h` with narrower internal helpers or a fuller pimpl boundary
+- Or begin the encoder split by separating frontend DSP from GGUF loading and runtime execution
 
 Guardrail for ongoing work:
 
@@ -77,9 +81,11 @@ Measured source file sizes in `src/`:
 | `src/tts_transformer.h` | 212 | Public header still carries many private helper declarations |
 | `src/decoder/decoder_layers.cpp` | 192 | Decoder layer helper implementations are now isolated |
 | `src/qwen3_tts.h` | 173 | Public facade is stable after pipeline/common splits |
-| `src/decoder/decoder_graph.cpp` | 142 | Decoder graph assembly is now isolated |
-| `src/audio_tokenizer_decoder.cpp` | 111 | Runtime/cache logic remains coupled in one file |
-| `src/audio_tokenizer_decoder.h` | 106 | Smaller, but still carries decoder-private helper declarations |
+| `src/decoder/decoder_graph.cpp` | 145 | Decoder graph assembly is now isolated |
+| `src/decoder/decoder_loader.cpp` | 329 | Decoder model loading and backend setup are isolated |
+| `src/audio_tokenizer_decoder.h` | 101 | Public decoder header now uses a private impl boundary |
+| `src/decoder/decoder_runtime.cpp` | 67 | Decoder runtime execution is now isolated |
+| `src/decoder/decoder_cache.cpp` | 52 | Decoder cached graph lifecycle is now isolated |
 | `src/tts_transformer.cpp` | 58 | Thin facade/free-helper translation unit after Phase 1 split |
 | `src/qwen3_tts.cpp` | 8 | Thin facade translation unit |
 
@@ -140,18 +146,20 @@ These are separable concerns that do not need to live in a single translation un
 
 The DSP frontend should be split from model/runtime code.
 
-### 5. Decoder layer definitions, graph assembly, and runtime are coupled
+### 5. Decoder split is now structurally complete
 
-`src/audio_tokenizer_decoder.cpp` currently mixes:
+The decoder is now separated into focused units:
 
-- graph cache management
-- layer helper implementations (`Snake`, RMSNorm, residual/upsample/decoder blocks)
-- full graph assembly
-- runtime execution
+- `src/decoder/decoder_loader.cpp`
+- `src/decoder/decoder_layers.cpp`
+- `src/decoder/decoder_graph.cpp`
+- `src/decoder/decoder_cache.cpp`
+- `src/decoder/decoder_runtime.cpp`
+- `src/decoder/decoder_state_internal.h`
 
-The model-loading, normalization, and unload path now live in `src/decoder/decoder_loader.cpp`.
+The public header no longer exposes decoder-private model/state storage.
 
-The decoder has natural seams and should be split accordingly.
+The decoder is no longer the primary refactor hotspot; the remaining major hotspots are the transformer public header and the encoder implementation file.
 
 ### 6. The current CMake target split is good enough
 

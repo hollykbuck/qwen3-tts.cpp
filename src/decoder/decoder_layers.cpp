@@ -1,4 +1,5 @@
 #include "audio_tokenizer_decoder.h"
+#include "decoder/decoder_state_internal.h"
 
 #include <cmath>
 
@@ -46,7 +47,7 @@ struct ggml_tensor * AudioTokenizerDecoder::apply_pre_tfm_layer(struct ggml_cont
                                                                  const pre_tfm_layer & layer,
                                                                  int32_t n_frames,
                                                                  struct ggml_tensor * positions) {
-    const auto & cfg = model_.config;
+    const auto & cfg = impl_->model.config;
     const int n_heads = cfg.n_heads;
     const int qkv_dim = cfg.latent_dim;
     const int head_dim = qkv_dim / n_heads;

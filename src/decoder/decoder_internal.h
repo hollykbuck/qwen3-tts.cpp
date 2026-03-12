@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio_tokenizer_decoder.h"
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "gguf.h"
