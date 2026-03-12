@@ -138,6 +138,7 @@ add_library(audio_tokenizer_decoder STATIC
     src/decoder/decoder_graph.cpp
     src/decoder/decoder_layers.cpp
     src/decoder/decoder_loader.cpp
+    src/decoder/decoder_runtime.cpp
     src/audio_tokenizer_decoder.cpp
     src/gguf_loader.cpp
 )
