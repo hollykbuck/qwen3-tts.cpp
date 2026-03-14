@@ -7,7 +7,16 @@ param(
     [string]$CliExe = "",
     [string]$OriginalCliExe = "",
     [switch]$Deterministic = $true,
-    [string]$Text = "Hello from qwen3-tts.cpp benchmark."
+    [string]$Text = "Hello from qwen3-tts.cpp benchmark.",
+    [ValidateSet("qwen_tts", "faster_qwen3_tts")]
+    [string]$PythonBackend = "qwen_tts",
+    [string]$PythonDevice = "auto",
+    [ValidateSet("auto", "float32", "float16", "bfloat16")]
+    [string]$PythonDType = "auto",
+    [string]$PythonAttnImplementation = "auto",
+    [ValidateSet("basic", "voice_clone", "voice_clone_synth_only")]
+    [string]$Scenario = "basic",
+    [string]$ReferenceAudio = "examples\readme_clone_input.wav"
 )
 
 Set-StrictMode -Version Latest
@@ -145,6 +154,23 @@ function Quote-CommandArgument {
     return '"' + $escaped + '"'
 }
 
+function Get-SlugComponent {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return "default"
+    }
+
+    $slug = $Value.ToLowerInvariant()
+    $slug = $slug -replace '[^a-z0-9]+', '-'
+    $slug = $slug.Trim('-')
+    if ([string]::IsNullOrWhiteSpace($slug)) {
+        return "default"
+    }
+
+    return $slug
+}
+
 function Get-ProcessTreeWorkingSetBytes {
     param([int]$RootPid)
 
@@ -259,6 +285,32 @@ function Parse-CppAudioDuration {
     return 0.0
 }
 
+function Parse-CppTimingMs {
+    param(
+        [string]$Text,
+        [string]$Label
+    )
+
+    $m = [regex]::Match($Text, ("(?mi)^\s*{0}:\s*([0-9]+)\s*ms" -f [regex]::Escape($Label)))
+    if ($m.Success) {
+        return [int]$m.Groups[1].Value
+    }
+    return $null
+}
+
+function Parse-BenchmarkMetric {
+    param(
+        [string]$Text,
+        [string]$Name
+    )
+
+    $m = [regex]::Match($Text, ("(?mi)^\s*{0}=([0-9]+(?:\.[0-9]+)?)" -f [regex]::Escape($Name)))
+    if ($m.Success) {
+        return Convert-ToInvariantDouble $m.Groups[1].Value
+    }
+    return $null
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $pythonPath = Resolve-PythonExe -Requested $PythonExe
 $cliPath = Resolve-CliExe -Requested $CliExe
@@ -266,9 +318,21 @@ $originalCliPath = Resolve-OriginalCliExe -Requested $OriginalCliExe
 $outRoot = Join-Path $repoRoot $OutputDir
 $logDir = Join-Path $outRoot "logs"
 $modelDirPath = if ([System.IO.Path]::IsPathRooted($ModelDir)) { $ModelDir } else { Join-Path $repoRoot $ModelDir }
+$pythonPipelineSlug = "python_{0}_{1}_{2}" -f (Get-SlugComponent $PythonBackend), (Get-SlugComponent $PythonDevice), (Get-SlugComponent $PythonDType)
+$referenceAudioPath = if ([System.IO.Path]::IsPathRooted($ReferenceAudio)) { $ReferenceAudio } else { Join-Path $repoRoot $ReferenceAudio }
+
+if ($PythonBackend -eq "faster_qwen3_tts" -and $Scenario -ne "voice_clone") {
+    if ($Scenario -ne "voice_clone_synth_only") {
+        throw "faster_qwen3_tts benchmark is only supported for -Scenario voice_clone or voice_clone_synth_only."
+    }
+}
 
 if (-not (Test-Path $modelDirPath)) {
     throw "Missing C++ model directory: $modelDirPath"
+}
+
+if ($Scenario -like "voice_clone*" -and -not (Test-Path $referenceAudioPath)) {
+    throw "Missing reference audio: $referenceAudioPath"
 }
 
 $models = @(
@@ -297,7 +361,7 @@ foreach ($m in $models) {
 New-Item -ItemType Directory -Path $outRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 
-Write-Host "Running Python vs C++ benchmark (basic TTS only)"
+Write-Host ("Running Python vs C++ benchmark ({0})" -f $Scenario)
 Write-Host "  Repo:        $repoRoot"
 Write-Host "  Python:      $pythonPath"
 Write-Host "  Fork CLI:    $cliPath"
@@ -306,7 +370,14 @@ if ([string]::IsNullOrWhiteSpace($originalCliPath)) {
 } else {
     Write-Host "  Orig CLI:    $originalCliPath"
 }
+Write-Host "  Python backend: $PythonBackend"
+Write-Host "  Python device:  $PythonDevice"
+Write-Host "  Python dtype:   $PythonDType"
+Write-Host "  Python attn:    $PythonAttnImplementation"
 Write-Host "  ModelDir:    $modelDirPath"
+if ($Scenario -like "voice_clone*") {
+    Write-Host "  Ref audio:   $referenceAudioPath"
+}
 Write-Host "  Repetitions: $Repetitions"
 Write-Host "  Deterministic: $Deterministic"
 Write-Host "  Prompt:      $Text"
@@ -317,29 +388,87 @@ $rows = New-Object System.Collections.Generic.List[object]
 foreach ($model in $models) {
     Write-Host ("=== Model {0} ===" -f $model.Name)
     for ($rep = 1; $rep -le $Repetitions; $rep++) {
-        Write-Host ("--- basic ({0}) run {1}/{2} ---" -f $model.Name, $rep, $Repetitions)
+        Write-Host ("--- {0} ({1}) run {2}/{3} ---" -f $Scenario, $model.Name, $rep, $Repetitions)
 
-        $pyOut = Join-Path $outRoot ("python_qwen_tts_basic_{0}_run{1}.wav" -f $model.Name, $rep)
+        $cppSpeakerEmbedding = ""
+        $pythonSpeakerEmbedding = ""
+        if ($Scenario -eq "voice_clone_synth_only") {
+            $cppSpeakerEmbedding = Join-Path $outRoot ("cpp_speaker_embedding_{0}.json" -f $model.Name)
+            if (-not (Test-Path $cppSpeakerEmbedding)) {
+                $prepOut = Join-Path $outRoot ("prep_cpp_speaker_{0}.wav" -f $model.Name)
+                $prepArgs = @(
+                    "-m", $modelDirPath,
+                    "--model-name", $model.CppModelName,
+                    "-t", "Speaker embedding prep.",
+                    "-o", $prepOut,
+                    "-r", $referenceAudioPath,
+                    "--dump-speaker-embedding", $cppSpeakerEmbedding,
+                    "--max-tokens", "1",
+                    "--temperature", "0",
+                    "--top-k", "0",
+                    "--top-p", "1.0"
+                )
+                $prepRun = Invoke-BenchmarkProcess -FilePath $cliPath -Arguments $prepArgs -WorkingDirectory $repoRoot
+                if ($prepRun.ExitCode -ne 0 -or -not (Test-Path $cppSpeakerEmbedding)) {
+                    throw "Failed to prepare C++ speaker embedding for $($model.Name): $($prepRun.Stderr)"
+                }
+            }
+
+            $pythonSpeakerEmbedding = Join-Path $outRoot ("python_speaker_embedding_{0}.pt" -f $model.Name)
+            if (-not (Test-Path $pythonSpeakerEmbedding)) {
+                $extractDevice = if ($PythonDevice -eq "auto") { "cuda:0" } else { $PythonDevice }
+                $pyPrepArgs = @(
+                    "third_party/python_ref/faster-qwen3-tts/examples/extract_speaker.py",
+                    "--ref_audio", $referenceAudioPath,
+                    "--output", $pythonSpeakerEmbedding,
+                    "--model_path", $model.HfModelDir,
+                    "--device", $extractDevice
+                )
+                $pyPrepRun = Invoke-BenchmarkProcess -FilePath $pythonPath -Arguments $pyPrepArgs -WorkingDirectory $repoRoot
+                if ($pyPrepRun.ExitCode -ne 0 -or -not (Test-Path $pythonSpeakerEmbedding)) {
+                    throw "Failed to prepare Python speaker embedding for $($model.Name): $($pyPrepRun.Stderr)"
+                }
+            }
+        }
+
+        $pyOut = Join-Path $outRoot ("{0}_{1}_{2}_run{3}.wav" -f $pythonPipelineSlug, $Scenario, $model.Name, $rep)
         $pyArgs = @(
             "scripts/benchmark_pytorch_vs_cpp.py",
             "--worker",
-            "--backend", "qwen_tts",
-            "--mode", "basic",
+            "--backend", $PythonBackend,
+            "--mode", $Scenario,
             "--hf-model-dir", $model.HfModelDir,
             "--text", $Text,
             "--output", $pyOut,
-            "--max-tokens", $MaxTokens.ToString()
+            "--max-tokens", $MaxTokens.ToString(),
+            "--device", $PythonDevice,
+            "--dtype", $PythonDType,
+            "--attn-implementation", $PythonAttnImplementation
         )
+        if ($Scenario -like "voice_clone*") {
+            $pyArgs += @("--ref-audio", $referenceAudioPath)
+        }
+        if ($Scenario -eq "voice_clone_synth_only") {
+            $pyArgs += @("--speaker-embedding-file", $pythonSpeakerEmbedding)
+        }
         if ($Deterministic) {
             $pyArgs += "--deterministic"
         }
 
         $pyRun = Invoke-BenchmarkProcess -FilePath $pythonPath -Arguments $pyArgs -WorkingDirectory $repoRoot
-        $pyAudioSec = Get-WavDurationSec -Path $pyOut
-        $pyRtf = if ($pyAudioSec -gt 0) { ($pyRun.WallMs / 1000.0) / $pyAudioSec } else { 0.0 }
+        $pyMetricText = $pyRun.Stdout + "`n" + $pyRun.Stderr
+        $pySynthMs = if ($Scenario -eq "voice_clone_synth_only") { Parse-BenchmarkMetric -Text $pyMetricText -Name "BENCHMARK_SYNTH_MS" } else { $null }
+        $pyEffectiveMs = if ($null -ne $pySynthMs) { $pySynthMs } else { [double]$pyRun.WallMs }
+        $pyAudioSec = if ($Scenario -eq "voice_clone_synth_only") {
+            $metricAudio = Parse-BenchmarkMetric -Text $pyMetricText -Name "BENCHMARK_AUDIO_SEC"
+            if ($null -ne $metricAudio) { $metricAudio } else { Get-WavDurationSec -Path $pyOut }
+        } else {
+            Get-WavDurationSec -Path $pyOut
+        }
+        $pyRtf = if ($pyAudioSec -gt 0) { ($pyEffectiveMs / 1000.0) / $pyAudioSec } else { 0.0 }
         $pyStatus = if ($pyRun.ExitCode -eq 0) { "PASS" } else { "FAIL" }
 
-        $pyLog = Join-Path $logDir ("basic_{0}_python_qwen_tts_run{1}.log" -f $model.Name, $rep)
+        $pyLog = Join-Path $logDir ("{0}_{1}_{2}_run{3}.log" -f $Scenario, $model.Name, $pythonPipelineSlug, $rep)
         @(
             "Command: $pythonPath $(($pyArgs | ForEach-Object { Quote-CommandArgument $_ }) -join ' ')",
             "ExitCode: $($pyRun.ExitCode)",
@@ -353,12 +482,12 @@ foreach ($model in $models) {
 
         $rows.Add([pscustomobject]@{
             Model     = $model.Name
-            Scenario  = "basic"
-            Pipeline  = "python_qwen_tts"
+            Scenario  = $Scenario
+            Pipeline  = $pythonPipelineSlug
             Run       = $rep
             Status    = $pyStatus
             ExitCode  = $pyRun.ExitCode
-            WallMs    = $pyRun.WallMs
+            WallMs    = [math]::Round($pyEffectiveMs, 1)
             PeakRssMB = [math]::Round($pyRun.PeakWorkingSet / 1MB, 2)
             AudioSec  = [math]::Round($pyAudioSec, 3)
             RTF       = [math]::Round($pyRtf, 3)
@@ -367,7 +496,7 @@ foreach ($model in $models) {
             OutputWav = $pyOut
         })
 
-        $cppOut = Join-Path $outRoot ("cpp_fork_basic_{0}_run{1}.wav" -f $model.Name, $rep)
+        $cppOut = Join-Path $outRoot ("cpp_fork_{0}_{1}_run{2}.wav" -f $Scenario, $model.Name, $rep)
         $cppArgs = @(
             "-m", $modelDirPath,
             "--model-name", $model.CppModelName,
@@ -378,16 +507,24 @@ foreach ($model in $models) {
             "--top-k", "0",
             "--top-p", "1.0"
         )
+        if ($Scenario -eq "voice_clone") {
+            $cppArgs += @("-r", $referenceAudioPath)
+        } elseif ($Scenario -eq "voice_clone_synth_only") {
+            $cppArgs += @("--speaker-embedding", $cppSpeakerEmbedding)
+        }
 
         $cppRun = Invoke-BenchmarkProcess -FilePath $cliPath -Arguments $cppArgs -WorkingDirectory $repoRoot
-        $cppAudioSec = Parse-CppAudioDuration -Stdout $cppRun.Stdout
+        $cppMetricText = $cppRun.Stdout + "`n" + $cppRun.Stderr
+        $cppSynthMs = if ($Scenario -eq "voice_clone_synth_only") { Parse-CppTimingMs -Text $cppMetricText -Label "Total" } else { $null }
+        $cppEffectiveMs = if ($null -ne $cppSynthMs) { [double]$cppSynthMs } else { [double]$cppRun.WallMs }
+        $cppAudioSec = Parse-CppAudioDuration -Stdout $cppMetricText
         if ($cppAudioSec -le 0.0) {
             $cppAudioSec = Get-WavDurationSec -Path $cppOut
         }
-        $cppRtf = if ($cppAudioSec -gt 0) { ($cppRun.WallMs / 1000.0) / $cppAudioSec } else { 0.0 }
+        $cppRtf = if ($cppAudioSec -gt 0) { ($cppEffectiveMs / 1000.0) / $cppAudioSec } else { 0.0 }
         $cppStatus = if ($cppRun.ExitCode -eq 0) { "PASS" } else { "FAIL" }
 
-        $cppLog = Join-Path $logDir ("basic_{0}_cpp_run{1}.log" -f $model.Name, $rep)
+        $cppLog = Join-Path $logDir ("{0}_{1}_cpp_run{2}.log" -f $Scenario, $model.Name, $rep)
         @(
             "Command: $cliPath $(($cppArgs | ForEach-Object { Quote-CommandArgument $_ }) -join ' ')",
             "ExitCode: $($cppRun.ExitCode)",
@@ -401,12 +538,12 @@ foreach ($model in $models) {
 
         $rows.Add([pscustomobject]@{
             Model     = $model.Name
-            Scenario  = "basic"
+            Scenario  = $Scenario
             Pipeline  = "cpp_fork"
             Run       = $rep
             Status    = $cppStatus
             ExitCode  = $cppRun.ExitCode
-            WallMs    = $cppRun.WallMs
+            WallMs    = [math]::Round($cppEffectiveMs, 1)
             PeakRssMB = [math]::Round($cppRun.PeakWorkingSet / 1MB, 2)
             AudioSec  = [math]::Round($cppAudioSec, 3)
             RTF       = [math]::Round($cppRtf, 3)
@@ -418,7 +555,7 @@ foreach ($model in $models) {
         if ([string]::IsNullOrWhiteSpace($originalCliPath)) {
             $rows.Add([pscustomobject]@{
                 Model     = $model.Name
-                Scenario  = "basic"
+                Scenario  = $Scenario
                 Pipeline  = "cpp_original"
                 Run       = $rep
                 Status    = "SKIP"
@@ -434,7 +571,7 @@ foreach ($model in $models) {
         } elseif ($model.Name -ne "0.6B") {
             $rows.Add([pscustomobject]@{
                 Model     = $model.Name
-                Scenario  = "basic"
+                Scenario  = $Scenario
                 Pipeline  = "cpp_original"
                 Run       = $rep
                 Status    = "SKIP"
@@ -448,7 +585,7 @@ foreach ($model in $models) {
                 OutputWav = ""
             })
         } else {
-            $origOut = Join-Path $outRoot ("cpp_original_basic_{0}_run{1}.wav" -f $model.Name, $rep)
+            $origOut = Join-Path $outRoot ("cpp_original_{0}_{1}_run{2}.wav" -f $Scenario, $model.Name, $rep)
             $origArgs = @(
                 "-m", $modelDirPath,
                 "-t", $Text,
@@ -458,16 +595,24 @@ foreach ($model in $models) {
                 "--top-k", "0",
                 "--top-p", "1.0"
             )
+            if ($Scenario -eq "voice_clone") {
+                $origArgs += @("-r", $referenceAudioPath)
+            } elseif ($Scenario -eq "voice_clone_synth_only") {
+                $origArgs += @("--speaker-embedding", $cppSpeakerEmbedding)
+            }
 
             $origRun = Invoke-BenchmarkProcess -FilePath $originalCliPath -Arguments $origArgs -WorkingDirectory $repoRoot
-            $origAudioSec = Parse-CppAudioDuration -Stdout $origRun.Stdout
+            $origMetricText = $origRun.Stdout + "`n" + $origRun.Stderr
+            $origSynthMs = if ($Scenario -eq "voice_clone_synth_only") { Parse-CppTimingMs -Text $origMetricText -Label "Total" } else { $null }
+            $origEffectiveMs = if ($null -ne $origSynthMs) { [double]$origSynthMs } else { [double]$origRun.WallMs }
+            $origAudioSec = Parse-CppAudioDuration -Stdout $origMetricText
             if ($origAudioSec -le 0.0) {
                 $origAudioSec = Get-WavDurationSec -Path $origOut
             }
-            $origRtf = if ($origAudioSec -gt 0) { ($origRun.WallMs / 1000.0) / $origAudioSec } else { 0.0 }
+            $origRtf = if ($origAudioSec -gt 0) { ($origEffectiveMs / 1000.0) / $origAudioSec } else { 0.0 }
             $origStatus = if ($origRun.ExitCode -eq 0) { "PASS" } else { "FAIL" }
 
-            $origLog = Join-Path $logDir ("basic_{0}_cpp_original_run{1}.log" -f $model.Name, $rep)
+            $origLog = Join-Path $logDir ("{0}_{1}_cpp_original_run{2}.log" -f $Scenario, $model.Name, $rep)
             @(
                 "Command: $originalCliPath $(($origArgs | ForEach-Object { Quote-CommandArgument $_ }) -join ' ')",
                 "ExitCode: $($origRun.ExitCode)",
@@ -481,12 +626,12 @@ foreach ($model in $models) {
 
             $rows.Add([pscustomobject]@{
                 Model     = $model.Name
-                Scenario  = "basic"
+                Scenario  = $Scenario
                 Pipeline  = "cpp_original"
                 Run       = $rep
                 Status    = $origStatus
                 ExitCode  = $origRun.ExitCode
-                WallMs    = $origRun.WallMs
+                WallMs    = [math]::Round($origEffectiveMs, 1)
                 PeakRssMB = [math]::Round($origRun.PeakWorkingSet / 1MB, 2)
                 AudioSec  = [math]::Round($origAudioSec, 3)
                 RTF       = [math]::Round($origRtf, 3)
@@ -499,27 +644,27 @@ foreach ($model in $models) {
 }
 
 $rawCsv = Join-Path $outRoot "benchmark_python_vs_cpp_raw.csv"
-$rows | Sort-Object Model, Pipeline, Run | Export-Csv -Path $rawCsv -NoTypeInformation
+$rows | Sort-Object Model, Scenario, Pipeline, Run | Export-Csv -Path $rawCsv -NoTypeInformation
 
 $summary = New-Object System.Collections.Generic.List[object]
 $pipelines = @($rows | Select-Object -ExpandProperty Pipeline -Unique | Sort-Object)
 
 foreach ($model in $models) {
-    $cppForkPass = @($rows | Where-Object { $_.Model -eq $model.Name -and $_.Pipeline -eq "cpp_fork" -and $_.Status -eq "PASS" })
+    $cppForkPass = @($rows | Where-Object { $_.Model -eq $model.Name -and $_.Scenario -eq $Scenario -and $_.Pipeline -eq "cpp_fork" -and $_.Status -eq "PASS" })
     $cppForkWallAvg = if ($cppForkPass.Count -gt 0) { ($cppForkPass | Measure-Object WallMs -Average).Average } else { 0.0 }
 
     foreach ($pipeline in $pipelines) {
-        $passRows = @($rows | Where-Object { $_.Model -eq $model.Name -and $_.Pipeline -eq $pipeline -and $_.Status -eq "PASS" })
+        $passRows = @($rows | Where-Object { $_.Model -eq $model.Name -and $_.Scenario -eq $Scenario -and $_.Pipeline -eq $pipeline -and $_.Status -eq "PASS" })
         $wallAvg = if ($passRows.Count -gt 0) { ($passRows | Measure-Object WallMs -Average).Average } else { 0.0 }
         $rtfAvg = if ($passRows.Count -gt 0) { ($passRows | Measure-Object RTF -Average).Average } else { 0.0 }
         $memAvg = if ($passRows.Count -gt 0) { ($passRows | Measure-Object PeakRssMB -Average).Average } else { 0.0 }
-        $skipRows = @($rows | Where-Object { $_.Model -eq $model.Name -and $_.Pipeline -eq $pipeline -and $_.Status -eq "SKIP" })
+        $skipRows = @($rows | Where-Object { $_.Model -eq $model.Name -and $_.Scenario -eq $Scenario -and $_.Pipeline -eq $pipeline -and $_.Status -eq "SKIP" })
         $skipReason = if ($skipRows.Count -gt 0) { ($skipRows[0].Note) } else { "" }
         $vsCppFork = if ($pipeline -eq "cpp_fork") { 1.0 } elseif ($cppForkWallAvg -gt 0) { $wallAvg / $cppForkWallAvg } else { 0.0 }
 
         $summary.Add([pscustomobject]@{
             Model      = $model.Name
-            Scenario   = "basic"
+            Scenario   = $Scenario
             Pipeline   = $pipeline
             WallMs     = [math]::Round($wallAvg, 1)
             RTF        = [math]::Round($rtfAvg, 3)
@@ -534,7 +679,6 @@ foreach ($model in $models) {
 $pipelineOrder = @{
     "cpp_fork" = 0
     "cpp_original" = 1
-    "python_qwen_tts" = 2
 }
 
 $summaryCsv = Join-Path $outRoot "benchmark_python_vs_cpp_summary.csv"
@@ -546,7 +690,7 @@ $summary |
 
 Write-Host ""
 Write-Host "Raw Results"
-$rows | Sort-Object Model, Pipeline, Run | Format-Table Model, Scenario, Pipeline, Run, Status, ExitCode, WallMs, PeakRssMB, AudioSec, RTF, Note -AutoSize
+$rows | Sort-Object Model, Scenario, Pipeline, Run | Format-Table Model, Scenario, Pipeline, Run, Status, ExitCode, WallMs, PeakRssMB, AudioSec, RTF, Note -AutoSize
 
 Write-Host ""
 Write-Host "Benchmark Summary (averages of PASS runs)"

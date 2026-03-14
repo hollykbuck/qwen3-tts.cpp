@@ -24,6 +24,7 @@ import platform
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +87,18 @@ def _write_wav(path: Path, audio, sample_rate: int) -> None:
     sf.write(str(path), arr, sample_rate)
 
 
+def _load_xvector_prompt(path: Path, device: str) -> dict[str, Any]:
+    import torch
+
+    spk_emb = torch.load(path, weights_only=True).to(device)
+    return {
+        "ref_code": [None],
+        "ref_spk_embedding": [spk_emb],
+        "x_vector_only_mode": [True],
+        "icl_mode": [False],
+    }
+
+
 def _run_basic_tts_qwen(model, text: str, max_tokens: int, output: Path, deterministic: bool) -> None:
     do_sample = not deterministic
     top_k = 50 if do_sample else None
@@ -120,6 +133,10 @@ def _run_pytorch_worker(
     text: str,
     ref_audio: Path,
     deterministic: bool,
+    device: str,
+    dtype: str,
+    attn_implementation: str | None,
+    speaker_embedding_file: Path | None,
 ) -> None:
     import torch
     from qwen_tts import Qwen3TTSModel
@@ -129,11 +146,34 @@ def _run_pytorch_worker(
     if mode == "voice_clone" and not ref_audio.exists():
         raise FileNotFoundError(f"Missing reference audio: {ref_audio}")
 
-    model = Qwen3TTSModel.from_pretrained(
-        str(hf_model_dir),
-        device_map="cpu",
-        torch_dtype=torch.float32,
-    )
+    requested_device = device.strip().lower()
+    if requested_device == "auto":
+        requested_device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    if requested_device.startswith("cuda") and not torch.cuda.is_available():
+        raise RuntimeError("CUDA Python benchmark requested, but torch.cuda.is_available() is false.")
+
+    requested_dtype = dtype.strip().lower()
+    if requested_dtype == "auto":
+        requested_dtype = "bfloat16" if requested_device.startswith("cuda") else "float32"
+
+    dtype_map = {
+        "float32": torch.float32,
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
+    }
+    if requested_dtype not in dtype_map:
+        raise ValueError(f"Unsupported dtype: {dtype}. Expected one of: {sorted(dtype_map)}")
+
+    model_kwargs: dict[str, Any] = {
+        "device_map": requested_device,
+        "dtype": dtype_map[requested_dtype],
+    }
+    if attn_implementation and attn_implementation.lower() != "auto":
+        model_kwargs["attn_implementation"] = attn_implementation
+    elif requested_device.startswith("cuda"):
+        model_kwargs["attn_implementation"] = "sdpa"
+
+    model = Qwen3TTSModel.from_pretrained(str(hf_model_dir), **model_kwargs)
     model.model = model.model.eval()
 
     if mode == "voice_clone":
@@ -156,6 +196,46 @@ def _run_pytorch_worker(
             max_new_tokens=max_tokens,
         )
         _write_wav(output, wavs[0], sr)
+    elif mode == "voice_clone_synth_only":
+        do_sample = not deterministic
+        top_k = 50 if do_sample else 0
+        top_p = 1.0
+        temperature = 0.9 if do_sample else 1.0
+
+        if speaker_embedding_file is not None:
+            if not speaker_embedding_file.exists():
+                raise FileNotFoundError(f"Missing speaker embedding file: {speaker_embedding_file}")
+            voice_clone_prompt = _load_xvector_prompt(speaker_embedding_file, requested_device)
+        else:
+            prompt_items = model.create_voice_clone_prompt(
+                ref_audio=str(ref_audio),
+                ref_text="",
+                x_vector_only_mode=True,
+            )
+            voice_clone_prompt = model._prompt_items_to_voice_clone_prompt(prompt_items)
+
+        import torch
+
+        torch.cuda.synchronize() if requested_device.startswith("cuda") else None
+        t0 = time.perf_counter()
+        wavs, sr = model.generate_voice_clone(
+            text=text or CLONE_TEXT,
+            language="English",
+            voice_clone_prompt=voice_clone_prompt,
+            non_streaming_mode=False,
+            do_sample=do_sample,
+            top_k=top_k,
+            top_p=top_p,
+            temperature=temperature,
+            repetition_penalty=1.05,
+            max_new_tokens=max_tokens,
+        )
+        torch.cuda.synchronize() if requested_device.startswith("cuda") else None
+        synth_ms = (time.perf_counter() - t0) * 1000.0
+        _write_wav(output, wavs[0], sr)
+        audio_sec = float(len(wavs[0])) / float(sr) if sr > 0 else 0.0
+        print(f"BENCHMARK_SYNTH_MS={synth_ms:.3f}")
+        print(f"BENCHMARK_AUDIO_SEC={audio_sec:.6f}")
     elif mode == "basic":
         _run_basic_tts_qwen(model, text or BASIC_TEXT, max_tokens, output, deterministic)
     else:
@@ -171,6 +251,10 @@ def _run_faster_worker(
     text: str,
     ref_audio: Path,
     deterministic: bool,
+    device: str,
+    dtype: str,
+    attn_implementation: str | None,
+    speaker_embedding_file: Path | None,
 ) -> None:
     import torch
 
@@ -196,12 +280,105 @@ def _run_faster_worker(
 
     from faster_qwen3_tts import FasterQwen3TTS
 
+    requested_device = device.strip().lower()
+    if requested_device == "auto":
+        requested_device = "cuda"
+    if requested_device != "cuda":
+        raise RuntimeError("faster-qwen3-tts benchmark currently supports only device='cuda'.")
+
+    requested_dtype = dtype.strip().lower()
+    if requested_dtype == "auto":
+        requested_dtype = "bfloat16"
+
+    dtype_map = {
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
+    }
+    if requested_dtype not in dtype_map:
+        raise ValueError("faster-qwen3-tts benchmark supports dtype auto|float16|bfloat16.")
+
+    requested_attn = attn_implementation if attn_implementation and attn_implementation.lower() != "auto" else "sdpa"
+
     model = FasterQwen3TTS.from_pretrained(
         str(hf_model_dir),
-        device="cuda",
-        dtype=torch.bfloat16,
-        attn_implementation="sdpa",
+        device=requested_device,
+        dtype=dtype_map[requested_dtype],
+        attn_implementation=requested_attn,
     )
+
+    if mode == "voice_clone_synth_only":
+        if speaker_embedding_file is not None:
+            if not speaker_embedding_file.exists():
+                raise FileNotFoundError(f"Missing speaker embedding file: {speaker_embedding_file}")
+            voice_clone_prompt = _load_xvector_prompt(speaker_embedding_file, requested_device)
+        else:
+            prompt_items = model.model.create_voice_clone_prompt(
+                ref_audio=str(ref_audio),
+                ref_text="",
+                x_vector_only_mode=True,
+            )
+            voice_clone_prompt = model.model._prompt_items_to_voice_clone_prompt(prompt_items)
+
+        def build_inputs() -> tuple[Any, Any, Any, Any]:
+            input_ids = model.model._tokenize_texts([model.model._build_assistant_text(text or CLONE_TEXT)])
+            return model._build_talker_inputs_local(
+                m=model.model.model,
+                input_ids=input_ids,
+                ref_ids=[None],
+                voice_clone_prompt=voice_clone_prompt,
+                languages=["English"],
+                speakers=None,
+                non_streaming_mode=False,
+            )
+
+        tie_warm, _, _, _ = build_inputs()
+        if not model._warmed_up:
+            if deterministic:
+                model.predictor_graph.do_sample = False
+                model.predictor_graph.top_k = 0
+                model.predictor_graph.top_p = 1.0
+                model.predictor_graph.temperature = 1.0
+            model._warmup(tie_warm.shape[1])
+
+        tie, tam, tth, tpe = build_inputs()
+        talker = model.model.model.talker
+        config = model.model.model.config.talker_config
+        from faster_qwen3_tts.generate import fast_generate
+
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        codec_ids, _timing = fast_generate(
+            talker=talker,
+            talker_input_embeds=tie,
+            attention_mask=tam,
+            trailing_text_hiddens=tth,
+            tts_pad_embed=tpe,
+            config=config,
+            predictor_graph=model.predictor_graph,
+            talker_graph=model.talker_graph,
+            max_new_tokens=max_tokens,
+            min_new_tokens=2,
+            temperature=temperature,
+            top_k=top_k or 0,
+            top_p=top_p or 1.0,
+            do_sample=do_sample,
+            repetition_penalty=1.05,
+        )
+        if codec_ids is None:
+            raise RuntimeError("faster-qwen3-tts synth-only benchmark returned no tokens")
+        audio_list, sr = model.model.model.speech_tokenizer.decode({"audio_codes": codec_ids.unsqueeze(0)})
+        torch.cuda.synchronize()
+        synth_ms = (time.perf_counter() - t0) * 1000.0
+        audio = audio_list[0]
+        if hasattr(audio, "cpu"):
+            audio = audio.flatten().cpu().numpy()
+        else:
+            audio = audio.flatten() if hasattr(audio, "flatten") else audio
+        _write_wav(output, audio, sr)
+        audio_sec = float(len(audio)) / float(sr) if sr > 0 else 0.0
+        print(f"BENCHMARK_SYNTH_MS={synth_ms:.3f}")
+        print(f"BENCHMARK_AUDIO_SEC={audio_sec:.6f}")
+        return
 
     wavs, sr = model.generate_voice_clone(
         text=text or CLONE_TEXT,
@@ -433,13 +610,36 @@ def _update_readme(readme_path: Path, fig_path: Path, report: dict[str, Any]) ->
 def main() -> int:
     p = argparse.ArgumentParser(description="Benchmark PyTorch vs qwen3-tts.cpp and generate comparison graph")
     p.add_argument("--worker", action="store_true", help="Internal: run one PyTorch worker case")
-    p.add_argument("--mode", choices=["basic", "voice_clone"], help="Worker mode")
+    p.add_argument("--mode", choices=["basic", "voice_clone", "voice_clone_synth_only"], help="Worker mode")
     p.add_argument("--output", type=Path, help="Worker output wav path")
     p.add_argument("--max-tokens", type=int, default=200, help="Max generated tokens")
     p.add_argument("--deterministic", action="store_true", help="Use deterministic greedy decoding")
     p.add_argument("--hf-model-dir", type=Path, default=DEFAULT_HF_MODEL_DIR, help="HF model directory for Python backends")
     p.add_argument("--text", type=str, default=BASIC_TEXT, help="Text prompt for worker mode")
     p.add_argument("--ref-audio", type=Path, default=REF_AUDIO, help="Reference audio path for voice-clone workers")
+    p.add_argument(
+        "--speaker-embedding-file",
+        type=Path,
+        help="Optional precomputed speaker embedding for synth-only voice-clone benchmarks",
+    )
+    p.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        help="Worker device for Python backend: auto, cpu, cuda, or cuda:0",
+    )
+    p.add_argument(
+        "--dtype",
+        type=str,
+        default="auto",
+        help="Worker dtype for Python backend: auto, float32, float16, or bfloat16",
+    )
+    p.add_argument(
+        "--attn-implementation",
+        type=str,
+        default="auto",
+        help="Attention implementation for Python backend: auto, eager, sdpa, or flash_attention_2",
+    )
     p.add_argument(
         "--backend",
         choices=["qwen_tts", "faster_qwen3_tts"],
@@ -469,6 +669,10 @@ def main() -> int:
                 args.text,
                 args.ref_audio,
                 args.deterministic,
+                args.device,
+                args.dtype,
+                args.attn_implementation,
+                args.speaker_embedding_file,
             )
         elif args.backend == "faster_qwen3_tts":
             _run_faster_worker(
@@ -480,6 +684,10 @@ def main() -> int:
                 args.text,
                 args.ref_audio,
                 args.deterministic,
+                args.device,
+                args.dtype,
+                args.attn_implementation,
+                args.speaker_embedding_file,
             )
         else:
             raise SystemExit(f"Unsupported backend: {args.backend}")
