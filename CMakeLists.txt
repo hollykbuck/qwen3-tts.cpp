@@ -233,6 +233,10 @@ add_executable(test_decoder
     tests/test_decoder.cpp
 )
 
+add_executable(test_decoder_cuda_long
+    tests/test_decoder_cuda_long.cpp
+)
+
 # Quantization tool
 add_executable(qwen3-tts-quantize
     src/qwen3_tts_quantize.cpp
@@ -242,6 +246,10 @@ target_include_directories(qwen3-tts-quantize PRIVATE
 )
 qwen3_link_ggml(qwen3-tts-quantize)
 target_link_libraries(test_decoder PRIVATE
+    audio_tokenizer_decoder
+    Threads::Threads
+)
+target_link_libraries(test_decoder_cuda_long PRIVATE
     audio_tokenizer_decoder
     Threads::Threads
 )
@@ -278,5 +286,9 @@ add_test(NAME transformer_test
 )
 add_test(NAME decoder_test
     COMMAND test_decoder
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+add_test(NAME decoder_cuda_long_test
+    COMMAND test_decoder_cuda_long
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )

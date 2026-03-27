@@ -1,4 +1,5 @@
 #include "audio_tokenizer_decoder.h"
+#include "ggml-backend.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -27,6 +28,27 @@ static bool save_binary_file(const char * path, const void * data, size_t size) 
     }
     f.write(reinterpret_cast<const char *>(data), size);
     return f.good();
+}
+
+static bool has_gpu_backend() {
+    ggml_backend_t backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU, nullptr);
+    if (!backend) {
+        backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
+    }
+    if (!backend) {
+        return false;
+    }
+    ggml_backend_free(backend);
+    return true;
+}
+
+static bool all_finite(const std::vector<float> & samples) {
+    for (float sample : samples) {
+        if (!std::isfinite(sample)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static void print_usage(const char * prog) {
@@ -223,6 +245,38 @@ int main(int argc, char ** argv) {
         }
     }
     printf("\n");
+
+    printf("Test 6: Long decode regression for large CUDA im2col widths\n");
+    if (!has_gpu_backend()) {
+        printf("  SKIP: No GPU backend available\n\n");
+    } else {
+        // Crossing ~410 frames forces later decoder stages past the 65535 CUDA grid.y limit.
+        const int stress_frames = 420;
+        std::vector<int32_t> stress_codes((size_t) stress_frames * config.n_codebooks);
+        for (int frame = 0; frame < stress_frames; ++frame) {
+            const int src_frame = frame % n_frames;
+            const int32_t * src = codes_i32.data() + (size_t) src_frame * config.n_codebooks;
+            int32_t * dst = stress_codes.data() + (size_t) frame * config.n_codebooks;
+            std::memcpy(dst, src, (size_t) config.n_codebooks * sizeof(int32_t));
+        }
+
+        std::vector<float> stress_samples;
+        if (!decoder.decode(stress_codes.data(), stress_frames, stress_samples)) {
+            fprintf(stderr, "  FAIL: Long decode failed at %d frames: %s\n",
+                    stress_frames, decoder.get_error().c_str());
+            fail_count++;
+        } else if (stress_samples.empty()) {
+            fprintf(stderr, "  FAIL: Long decode produced no samples\n");
+            fail_count++;
+        } else if (!all_finite(stress_samples)) {
+            fprintf(stderr, "  FAIL: Long decode produced non-finite samples\n");
+            fail_count++;
+        } else {
+            printf("  PASS: Decoded %d frames into %zu finite samples\n",
+                   stress_frames, stress_samples.size());
+        }
+        printf("\n");
+    }
 
     if (fail_count > 0) {
         printf("=== Tests completed with FAILURES (%d) ===\n", fail_count);
