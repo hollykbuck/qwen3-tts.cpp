@@ -7,7 +7,7 @@ param (
     [switch]$EnableTiming,
     [switch]$BuildAll,
     [switch]$RunSmokeTest,
-    [ValidateSet("Debug", "Release", "RelWithDebiInfo")]
+    [ValidateSet("Debug", "Release", "RelWithDebInfo")]
     [string]$Configuration = "Release",
     [string]$BuildDir = "",
     [string]$GGMLDir = "",
